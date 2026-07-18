@@ -103,6 +103,35 @@ export OPENAI_API_KEY=sk-...      # or
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
+## Deployment (why the hosted site needs two services)
+
+The frontend (`apps/web`) and the API (`apps/api`) deploy separately. The API
+holds long-lived Server-Sent Event connections for the live agent progress
+stream, which Vercel's serverless functions do not support — so host the API on
+a platform that keeps a process running (Render, Railway, Fly.io, etc.).
+
+If the hosted site shows *"Could not reach the analysis engine. Is the API
+running on :8000?"*, it means the frontend has no API URL configured and is
+falling back to `localhost:8000` (which only exists on a developer's machine).
+
+**1. Deploy the API** (Render, using the included `render.yaml`):
+
+- Render dashboard → New → Blueprint → select this repo → apply.
+- This builds `apps/api` and runs `uvicorn main:app --host 0.0.0.0 --port $PORT`.
+- Optionally set `TAVILY_API_KEY` / `OPENAI_API_KEY` in the dashboard.
+- Copy the resulting public URL, e.g. `https://gridsentry-api.onrender.com`.
+
+**2. Point the frontend at it** (Vercel → project → Settings → Environment
+Variables), then redeploy:
+
+```
+NEXT_PUBLIC_API_URL = https://gridsentry-api.onrender.com   # baked into the browser bundle
+API_URL             = https://gridsentry-api.onrender.com   # used by the server-side PDF route
+```
+
+`NEXT_PUBLIC_API_URL` is read at build time, so a **redeploy is required** after
+setting it. CORS is already open on the API (`allow_origins=["*"]`).
+
 ## Demo script
 
 Paste `42.9000, -74.3000` (Mohawk Valley farmland, upstate New York) into the

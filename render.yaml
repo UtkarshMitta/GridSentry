@@ -1,0 +1,23 @@
+# Render blueprint for the GridSentry FastAPI backend.
+# Deploy: https://dashboard.render.com  →  New  →  Blueprint  →  pick this repo.
+# Render supports long-lived Server-Sent Events, which the live agent
+# progress stream depends on (Vercel serverless functions do not).
+services:
+  - type: web
+    name: gridsentry-api
+    runtime: python
+    plan: free
+    rootDir: apps/api
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Optional — enables Tavily-backed jurisdiction verification.
+      # Set the value in the Render dashboard; do not commit the key.
+      - key: TAVILY_API_KEY
+        sync: false
+      # Optional — enables a real LLM for the agent narratives.
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
