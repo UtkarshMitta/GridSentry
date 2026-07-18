@@ -1,7 +1,12 @@
 import type { ProjectType, Run } from "./types";
 
+// Env var takes precedence; local dev uses the local API; deployed builds
+// default to the hosted Render backend.
 export const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  process.env.NEXT_PUBLIC_API_URL ??
+  (process.env.NODE_ENV === "development"
+    ? "http://localhost:8000"
+    : "https://gridsentry-api.onrender.com");
 
 export async function createRun(input: {
   lat: number;
