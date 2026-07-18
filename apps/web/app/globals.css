@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-base text-zinc-300 antialiased;
+  background-image: radial-gradient(
+      1200px 600px at 75% -10%,
+      rgba(53, 199, 143, 0.06),
+      transparent 60%
+    ),
+    radial-gradient(900px 500px at 10% 110%, rgba(53, 199, 143, 0.04), transparent 60%);
+}
+
+::selection {
+  background: rgba(53, 199, 143, 0.3);
+}
+
+/* Thin dark scrollbars for the report panel */
+.scroll-slim::-webkit-scrollbar {
+  width: 8px;
+}
+.scroll-slim::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+.scroll-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Leaflet dark-theme adjustments */
+.leaflet-container {
+  background: #0b0f14;
+  font-family: inherit;
+}
+.leaflet-control-zoom a {
+  background: #161d26 !important;
+  color: #d4d4d8 !important;
+  border-color: rgba(255, 255, 255, 0.08) !important;
+}
+.leaflet-control-zoom a:hover {
+  background: #1e2733 !important;
+}
+.leaflet-control-attribution {
+  background: rgba(11, 15, 20, 0.75) !important;
+  color: #71717a !important;
+  font-size: 10px !important;
+}
+.leaflet-control-attribution a {
+  color: #a1a1aa !important;
+}
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: #161d26 !important;
+  color: #d4d4d8 !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.leaflet-popup-content {
+  margin: 10px 14px !important;
+  font-size: 12px !important;
+  line-height: 1.5 !important;
+}
+
+.skeleton {
+  @apply rounded-md bg-raised;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  background-size: 400px 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.6s linear infinite;
+}
