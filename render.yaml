@@ -12,6 +12,11 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # Pin the Python runtime: Render defaults to the newest Python (3.14+),
+      # which has no prebuilt pydantic-core wheel yet, so the build tries to
+      # compile Rust and fails on Render's read-only filesystem.
+      - key: PYTHON_VERSION
+        value: 3.12.7
       # Optional — enables Tavily-backed jurisdiction verification.
       # Set the value in the Render dashboard; do not commit the key.
       - key: TAVILY_API_KEY
