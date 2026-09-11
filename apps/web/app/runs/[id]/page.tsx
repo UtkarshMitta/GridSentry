@@ -8,9 +8,25 @@ import { ReportPanel } from "@/components/report-panel";
 import { SiteMap } from "@/components/site-map";
 import { Badge, Button, Card, Skeleton, riskTone } from "@/components/ui";
 import { eventsUrl, getRun } from "@/lib/api";
+import { isSimulated, verdictLabel } from "@/lib/report";
 import type { PipelineEvent, Run } from "@/lib/types";
 
 type Phase = "connecting" | "running" | "complete" | "error";
+
+/** Legend entries for the layers actually drawn on this run's map (colours match site-map-inner). */
+function mapLegend(run: Run): [string, string][] {
+  const gis = run.gis!;
+  const entries: [string, string, boolean][] = [
+    ["#35C78F", "Project footprint", true],
+    ["#F0625D", "State-regulated wetland", gis.wetlands.some((w) => w.state_protected)],
+    ["#E8B25A", "NWI wetland", gis.wetlands.some((w) => !w.state_protected)],
+    ["#E8B25A", "Critical habitat", gis.habitats.some((h) => h.geometry)],
+    ["#7DD3FC", "FEMA flood zone", gis.flood_zones.length > 0],
+    ["#5CA8FF", "Protected / public land", gis.protected_lands.length > 0],
+    ["#35C78F", "Alt. route", !!run.report?.alternatives[0]?.geometry],
+  ];
+  return entries.filter(([, , shown]) => shown).map(([color, label]) => [color, label]);
+}
 
 export default function RunPage({ params }: { params: { id: string } }) {
   const runId = params.id;
@@ -143,18 +159,17 @@ export default function RunPage({ params }: { params: { id: string } }) {
                   <h1 className="text-xl font-bold tracking-tight text-zinc-50">
                     {run.gis.site.name}
                   </h1>
-                  {run.report.developable ? (
-                    <Badge tone={riskTone(run.report.risk_level)} className="uppercase">
-                      {run.report.risk_level} risk · {run.report.risk_score}/100
+                  {!run.report.developable ? (
+                    <Badge tone="danger" className="uppercase">
+                      ⛔ Not viable · {verdictLabel(run.report.land_status.category)}
+                    </Badge>
+                  ) : isSimulated(run) ? (
+                    <Badge tone="danger" className="uppercase">
+                      ▲ Simulated data · no real risk score
                     </Badge>
                   ) : (
-                    <Badge tone="danger" className="uppercase">
-                      ⛔ Not viable ·{" "}
-                      {run.report.land_status.category === "urban_built"
-                        ? "no buildable land"
-                        : run.report.land_status.category === "open_water"
-                          ? "open water"
-                          : "federal land"}
+                    <Badge tone={riskTone(run.report.risk_level)} className="uppercase">
+                      {run.report.risk_level} risk · {run.report.risk_score}/100
                     </Badge>
                   )}
                   {(() => {
@@ -173,7 +188,8 @@ export default function RunPage({ params }: { params: { id: string } }) {
                 </div>
                 <p className="mt-1 font-mono text-xs text-zinc-500">
                   {run.gis.site.lat.toFixed(4)}, {run.gis.site.lon.toFixed(4)} ·{" "}
-                  {run.gis.site.acreage} ac · {run.gis.site.project_type} ·{" "}
+                  {run.gis.site.acreage} ac{run.gis.site.acreage_assumed ? " (assumed)" : ""} ·{" "}
+                  {run.gis.site.project_type} ·{" "}
                   {new Date(run.report.generated_at).toLocaleString()}
                 </p>
                 {run.report.developable && (
@@ -189,7 +205,8 @@ export default function RunPage({ params }: { params: { id: string } }) {
                       const state = run.gis!.provenance[key];
                       const tone =
                         state === "live" ? "accent" : state === "simulated" ? "danger" : "amber";
-                      const mark = state === "live" ? "● live" : state === "simulated" ? "▲ simulated" : "○ n/a";
+                      const mark =
+                        state === "live" ? "● live" : state === "simulated" ? "▲ simulated" : "○ not assessed";
                       return (
                         <Badge key={key} tone={tone as "accent" | "danger" | "amber"} className="text-[10px]">
                           {label}: {mark}
@@ -250,6 +267,21 @@ export default function RunPage({ params }: { params: { id: string } }) {
                       )}
                     </p>
                   </div>
+                ) : run.report.land_status.category === "outside_coverage" ? (
+                  <div>
+                    <p className="text-sm font-semibold text-danger">
+                      Outside analysis coverage — no U.S. jurisdiction at these coordinates
+                    </p>
+                    <p className="mt-1 text-[13px] leading-relaxed text-zinc-400">
+                      Neither the U.S. Census Bureau nor OpenStreetMap places this point in a U.S.
+                      state. Every dataset GridSentry uses (NWI, IPaC, FEMA, PAD-US, NLCD) covers U.S.
+                      land only, so an empty result here would mean &ldquo;no data&rdquo;, not &ldquo;no
+                      constraints&rdquo; — no assessment was generated.{" "}
+                      <span className="text-amber">
+                        Check the latitude/longitude order and signs.
+                      </span>
+                    </p>
+                  </div>
                 ) : (
                   <div>
                     <p className="text-sm font-semibold text-danger">
@@ -299,16 +331,13 @@ export default function RunPage({ params }: { params: { id: string } }) {
                     <span className="text-xs font-medium text-zinc-400">
                       Risk zone overlay
                     </span>
-                    <div className="flex items-center gap-3 text-[10.5px] text-zinc-500">
-                      <span className="flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-sm bg-danger/70" /> Protected wetland
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-sm bg-amber/70" /> Habitat / NWI
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <span className="h-2 w-2 rounded-sm bg-accent/70" /> Alt. route
-                      </span>
+                    <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1 text-[10.5px] text-zinc-500">
+                      {mapLegend(run).map(([color, label]) => (
+                        <span key={label} className="flex items-center gap-1">
+                          <span className="h-2 w-2 rounded-sm" style={{ backgroundColor: color }} />{" "}
+                          {label}
+                        </span>
+                      ))}
                     </div>
                   </div>
                   <div className="h-[420px] lg:h-[calc(100vh-13rem)]">

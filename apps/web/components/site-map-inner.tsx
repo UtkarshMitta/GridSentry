@@ -14,10 +14,17 @@ import {
 import type { GISPayload, GeoJSONGeometry } from "@/lib/types";
 import "leaflet/dist/leaflet.css";
 
+// Keyless dark basemap. (CARTO's dark_all tiles now require an API key and
+// serve an "API KEY REQUIRED" watermark without one.) Override with
+// NEXT_PUBLIC_TILE_URL to use another provider.
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas";
 const TILE_URL =
-  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
+  process.env.NEXT_PUBLIC_TILE_URL || `${ESRI}/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`;
+const LABEL_URL = process.env.NEXT_PUBLIC_TILE_URL
+  ? null
+  : `${ESRI}/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`;
 const TILE_ATTR =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  'Tiles &copy; <a href="https://www.esri.com">Esri</a> &mdash; Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 export interface SiteMapProps {
   center: [number, number];
@@ -33,7 +40,9 @@ export interface SiteMapProps {
 function ClickHandler({ onPick }: { onPick: (lat: number, lon: number) => void }) {
   useMapEvents({
     click(e) {
-      onPick(e.latlng.lat, e.latlng.lng);
+      // Wrap so a click on a panned-around world copy stays within ±180°.
+      const { lat, lng } = e.latlng.wrap();
+      onPick(lat, lng);
     },
   });
   return null;
@@ -71,7 +80,8 @@ export default function SiteMapInner({
       zoomControl={interactive}
       attributionControl
     >
-      <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
+      <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxNativeZoom={16} maxZoom={19} />
+      {LABEL_URL && <TileLayer url={LABEL_URL} maxNativeZoom={16} maxZoom={19} />}
       {onPick && <ClickHandler onPick={onPick} />}
       {marker && <FlyTo target={marker} zoom={Math.max(zoom, 13)} />}
 
@@ -159,8 +169,11 @@ export default function SiteMapInner({
                 <strong>{p.name}</strong>
                 <br />
                 {p.designation} · {p.manager}
+                {p.gap_status && <> · GAP {p.gap_status}</>}
                 <br />
-                {(p.distance_m / 1000).toFixed(1)} km {p.bearing}
+                {p.overlaps_footprint
+                  ? "Overlaps the project footprint"
+                  : `${(p.distance_m / 1000).toFixed(1)} km ${p.bearing}`}
               </Popup>
             </GeoJSON>
           ))}
@@ -172,6 +185,7 @@ export default function SiteMapInner({
             >
               <Popup>
                 <strong>FEMA Zone {f.zone}</strong>
+                {f.sfha && <> · base floodplain</>}
                 <br />
                 {f.description}
               </Popup>
@@ -185,7 +199,7 @@ export default function SiteMapInner({
           positions={lineCoords(altRoute)}
           pathOptions={{ color: "#35C78F", weight: 3, dashArray: "8 6", opacity: 0.9 }}
         >
-          <Popup>Alternative A — southern interconnection corridor</Popup>
+          <Popup>Alternative routing corridor</Popup>
         </Polyline>
       )}
     </MapContainer>

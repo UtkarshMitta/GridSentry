@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { createRun, parseCoordinates } from "@/lib/api";
+import { API_URL, createRun, parseCoordinates } from "@/lib/api";
 import type { ProjectType } from "@/lib/types";
 import { Button, cn } from "./ui";
 
@@ -23,6 +23,7 @@ export function CoordinateInput({
   const router = useRouter();
   const [raw, setRaw] = useState("");
   const [projectType, setProjectType] = useState<ProjectType>("solar");
+  const [acreage, setAcreage] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -40,19 +41,24 @@ export function CoordinateInput({
       setError("Enter coordinates as decimal degrees, e.g. 42.9000, -74.3000");
       return;
     }
+    const acres = acreage.trim() ? Number(acreage) : undefined;
+    if (acres !== undefined && !(acres > 0 && acres <= 50000)) {
+      setError("Acreage must be a number between 1 and 50,000 (or leave it blank).");
+      return;
+    }
     setSubmitting(true);
     try {
-      const { run_id } = await createRun({ ...coords, project_type: projectType });
+      const { run_id } = await createRun({ ...coords, project_type: projectType, acreage: acres });
       router.push(`/runs/${run_id}`);
     } catch {
-      setError("Could not reach the analysis engine. Is the API running on :8000?");
+      setError(`Could not reach the analysis engine at ${API_URL}. Is the API running?`);
       setSubmitting(false);
     }
   }
 
   return (
     <div className="w-full max-w-xl">
-      <div className="flex gap-1.5 pb-3">
+      <div className="flex flex-wrap items-center gap-1.5 pb-3">
         {PROJECT_TYPES.map((p) => (
           <button
             key={p.id}
@@ -68,6 +74,21 @@ export function CoordinateInput({
             {p.label}
           </button>
         ))}
+        <label className="ml-auto flex items-center gap-1.5 text-xs text-zinc-500">
+          Footprint
+          <input
+            value={acreage}
+            onChange={(e) => {
+              setAcreage(e.target.value);
+              setError(null);
+            }}
+            inputMode="decimal"
+            placeholder="300"
+            aria-label="Project footprint in acres (optional)"
+            className="h-7 w-16 rounded-md border border-edge bg-surface px-2 text-right text-xs text-zinc-100 placeholder:text-zinc-600 focus:border-accent/50 focus:outline-none"
+          />
+          acres
+        </label>
       </div>
 
       <div
@@ -127,7 +148,7 @@ export function CoordinateInput({
             </motion.p>
           ) : (
             <motion.p key="hint" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="text-xs text-zinc-600">
-              WGS 84 decimal degrees · analysis runs in ~20 seconds
+              WGS 84 decimal degrees · blank acreage assumes 300 ac · runs in ~20 seconds
             </motion.p>
           )}
         </AnimatePresence>
@@ -136,7 +157,7 @@ export function CoordinateInput({
             setRaw(DEMO_COORDS);
             setError(null);
           }}
-          className="text-xs text-accent/80 transition-colors hover:text-accent"
+          className="shrink-0 whitespace-nowrap text-xs text-accent/80 transition-colors hover:text-accent"
         >
           Try demo site ↗
         </button>

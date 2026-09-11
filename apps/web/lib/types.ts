@@ -17,17 +17,19 @@ export interface Jurisdiction {
   country_code: string | null;
   verified: boolean;
   method: string;
+  in_coverage: boolean | null; // false = positively outside any U.S. state
   sources: { title: string; url: string }[];
 }
 
 export interface LandStatus {
   developable: boolean;
-  category: string; // developable | federal_protected | urban_built | open_water
+  category: string; // developable | federal_protected | urban_built | open_water | outside_coverage
   owner_type: string | null;
   manager: string | null;
   manager_code: string | null;
   unit_name: string | null;
   designation: string | null;
+  designation_code: string | null;
   land_cover_checked: boolean;
   dominant_cover: string | null;
   dominant_cover_class: number | null;
@@ -46,6 +48,7 @@ export interface Site {
   project_type: ProjectType;
   name: string;
   acreage: number;
+  acreage_assumed: boolean;
   footprint: GeoJSONGeometry;
   jurisdiction: Jurisdiction;
   land_status: LandStatus;
@@ -76,7 +79,7 @@ export interface Habitat {
   distance_m: number | null;
   bearing: string | null;
   geometry: GeoJSONGeometry | null;
-  basis: string; // ipac_species_list | critical_habitat
+  basis: string; // ipac_species_list | critical_habitat | proposed_critical_habitat
   currently_listed: boolean;
   source: string;
 }
@@ -90,6 +93,9 @@ export interface ProtectedLand {
   bearing: string;
   geometry: GeoJSONGeometry;
   name_verified: boolean;
+  designation_code: string | null;
+  gap_status: string; // PAD-US GAP 1-4 (1-2 = managed for biodiversity)
+  overlaps_footprint: boolean;
   source: string;
 }
 
@@ -99,11 +105,13 @@ export interface FloodZone {
   description: string;
   distance_m: number;
   geometry: GeoJSONGeometry;
+  sfha: boolean; // 1%-annual-chance base floodplain (A*/V* zones)
+  overlaps_footprint: boolean;
   source: string;
 }
 
 export interface DataProvenance {
-  wetlands: string; // live | unavailable | simulated
+  wetlands: string; // live | unavailable | simulated | not_assessed
   species: string;
   flood: string;
   protected: string;
@@ -140,7 +148,7 @@ export interface Finding {
 export interface ReportSection {
   id: string;
   title: string;
-  risk: "high" | "moderate" | "low" | "none";
+  risk: "high" | "moderate" | "low" | "none" | "unknown"; // unknown = data unavailable
   summary: string;
   findings: Finding[];
   citation_ids: string[];

@@ -5,7 +5,7 @@ import type { AgentId, PipelineEvent } from "@/lib/types";
 import { Card, cn } from "./ui";
 
 const STAGES: { id: AgentId; title: string; role: string }[] = [
-  { id: "system", title: "Data Ingestion", role: "GIS · NWI · ECOS · PAD-US · NFHL" },
+  { id: "system", title: "Data Ingestion", role: "NWI · IPaC · FEMA · PAD-US · NLCD" },
   { id: "geolocation", title: "Geolocation Analyst", role: "Spatial conflict detection" },
   { id: "legal", title: "Legal Compliance Officer", role: "NEPA · CWA · ESA · state law" },
   { id: "critic", title: "Red-Team Critic", role: "Adversarial review & stop-work scan" },
@@ -51,6 +51,7 @@ export function AgentProgress({ events }: { events: PipelineEvent[] }) {
       <div className="mb-6 h-1 overflow-hidden rounded-full bg-white/[0.06]">
         <motion.div
           className="h-full rounded-full bg-accent"
+          initial={{ width: 0 }}
           animate={{ width: `${progress * 100}%` }}
           transition={{ ease: "easeOut", duration: 0.5 }}
         />

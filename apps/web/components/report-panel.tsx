@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { Report, Severity } from "@/lib/types";
+import { reportLevelNotes } from "@/lib/report";
+import type { CriticNote, Report, Severity } from "@/lib/types";
 import { CitationBadge } from "./citation-badge";
 import { Badge, Card, cn, riskTone } from "./ui";
 
@@ -17,6 +18,35 @@ function citationsFor(report: Report, ids: string[]) {
   return ids
     .map((id) => report.citations.find((c) => c.id === id))
     .filter((c): c is NonNullable<typeof c> => Boolean(c));
+}
+
+function CriticNoteBox({ note }: { note: CriticNote }) {
+  return (
+    <div
+      className={cn(
+        "rounded-lg border px-3.5 py-2.5 text-[12.5px] leading-relaxed",
+        note.severity === "blocker"
+          ? "border-danger/30 bg-danger/[0.07] text-zinc-300"
+          : note.severity === "warning"
+            ? "border-amber/25 bg-amber/[0.06] text-zinc-400"
+            : "border-edge bg-white/[0.02] text-zinc-400",
+      )}
+    >
+      <span
+        className={cn(
+          "mr-2 font-mono text-[10px] font-semibold uppercase tracking-wider",
+          note.severity === "blocker"
+            ? "text-danger"
+            : note.severity === "warning"
+              ? "text-amber"
+              : "text-zinc-500",
+        )}
+      >
+        Red-team · {note.severity}
+      </span>
+      {note.note}
+    </div>
+  );
 }
 
 function CollapsibleSection({
@@ -40,7 +70,7 @@ function CollapsibleSection({
       >
         <div className="flex items-center gap-3">
           <Badge tone={riskTone(section.risk)} className="uppercase">
-            {section.risk}
+            {section.risk === "unknown" ? "not assessed" : section.risk}
           </Badge>
           <h3 className="text-sm font-semibold text-zinc-100">{section.title}</h3>
         </div>
@@ -99,25 +129,7 @@ function CollapsibleSection({
               {notes.length > 0 && (
                 <div className="mt-4 space-y-2">
                   {notes.map((n) => (
-                    <div
-                      key={n.id}
-                      className={cn(
-                        "rounded-lg border px-3.5 py-2.5 text-[12.5px] leading-relaxed",
-                        n.severity === "blocker"
-                          ? "border-danger/30 bg-danger/[0.07] text-zinc-300"
-                          : "border-amber/25 bg-amber/[0.06] text-zinc-400",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "mr-2 font-mono text-[10px] font-semibold uppercase tracking-wider",
-                          n.severity === "blocker" ? "text-danger" : "text-amber",
-                        )}
-                      >
-                        Red-team · {n.severity}
-                      </span>
-                      {n.note}
-                    </div>
+                    <CriticNoteBox key={n.id} note={n} />
                   ))}
                 </div>
               )}
@@ -130,6 +142,7 @@ function CollapsibleSection({
 }
 
 export function ReportPanel({ report }: { report: Report }) {
+  const globalNotes = reportLevelNotes(report);
   return (
     <div className="space-y-4">
       {/* Executive summary */}
@@ -144,6 +157,16 @@ export function ReportPanel({ report }: { report: Report }) {
           {report.executive_summary}
         </p>
       </Card>
+
+      {/* Report-level red-team review: data provenance, jurisdiction, assumptions */}
+      {globalNotes.length > 0 && (
+        <Card className="space-y-2 p-5">
+          <h2 className="pb-1 text-sm font-semibold text-zinc-100">Red-Team Review</h2>
+          {globalNotes.map((n) => (
+            <CriticNoteBox key={n.id} note={n} />
+          ))}
+        </Card>
+      )}
 
       {/* Stop-work risks */}
       {report.stop_work_risks.length > 0 && (
