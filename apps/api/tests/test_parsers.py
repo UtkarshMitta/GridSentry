@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import httpx
 import pytest
@@ -168,3 +169,52 @@ async def test_slow_layer_is_marked_unavailable(monkeypatch):
     data = await geodata.fetch_all(LAT, LON, 300, "NY")
     assert data["provenance"]["wetlands"] == "unavailable"
     assert data["provenance"]["species"] == "live"
+
+
+# --- review regressions -------------------------------------------------------
+
+def _padus_feature(name, gap, geom, des="SP", loc="State Park", mang="SPR"):
+    return {"attributes": {"Unit_Nm": name, "Des_Tp": des, "Loc_Ds": loc, "Mang_Name": mang,
+                           "Mang_Type": "STAT", "GAP_Sts": gap}, "geometry": geom}
+
+
+async def test_padus_containing_unit_survives_capped_nearby_query():
+    """Dense areas hold hundreds of PAD-US records within 5 km; the capped
+    nearby query may omit the park the site is in, so it's queried separately."""
+    park = _padus_feature("Containing Park", "4", esri_square(LAT, LON, 0, 0, 1500))
+    others = [_padus_feature(f"Pocket Park {i}", "4", esri_square(LAT, LON, 3000, i * 10, 20), des="LP")
+              for i in range(25)]
+
+    def by_geometry_type(request):
+        overlap = request.url.params["geometryType"] == "esriGeometryEnvelope"
+        return httpx.Response(200, json={"features": [park] if overlap else others})
+
+    with respx.mock:
+        respx.get(geodata.PADUS_URL).mock(side_effect=by_geometry_type)
+        async with httpx.AsyncClient() as client:
+            lands = await geodata._fetch_protected(client, LAT, LON, 300)
+    assert lands[0].name == "Containing Park" and lands[0].overlaps_footprint
+
+
+async def test_padus_same_name_records_merge_without_losing_overlap():
+    fee = _padus_feature("Split Park", "4", esri_square(LAT, LON, 0, 0, 200))
+    designation = _padus_feature("Split Park", "2", esri_square(LAT, LON, 2500, 0, 100))
+    with respx.mock:
+        respx.get(geodata.PADUS_URL).mock(return_value=httpx.Response(200, json={"features": [fee, designation]}))
+        async with httpx.AsyncClient() as client:
+            [park] = await geodata._fetch_protected(client, LAT, LON, 300)
+    assert park.gap_status == "2"          # most protective status
+    assert park.overlaps_footprint         # overlap from the fee record kept
+    assert park.distance_m == 0.0
+
+
+async def test_ipac_is_queried_with_the_exact_footprint():
+    """Crithab hits are reported as 'in the footprint' — the query box must be the footprint."""
+    with respx.mock:
+        route = respx.post(geodata.IPAC_URL).mock(
+            return_value=httpx.Response(200, json=load_fixture("ipac_fairbanks.json")))
+        async with httpx.AsyncClient() as client:
+            await geodata._fetch_species(client, LAT, LON, 100)
+    ring = json.loads(json.loads(route.calls[0].request.content)["location.footprint"])["coordinates"][0]
+    half_height_m = (ring[2][1] - ring[0][1]) / 2 * 111_320
+    assert half_height_m == pytest.approx(100, abs=1)

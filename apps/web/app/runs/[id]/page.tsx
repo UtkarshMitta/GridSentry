@@ -20,10 +20,8 @@ function mapLegend(run: Run): [string, string][] {
     ["#35C78F", "Project footprint", true],
     ["#F0625D", "State-regulated wetland", gis.wetlands.some((w) => w.state_protected)],
     ["#E8B25A", "NWI wetland", gis.wetlands.some((w) => !w.state_protected)],
-    ["#E8B25A", "Critical habitat", gis.habitats.some((h) => h.geometry)],
     ["#7DD3FC", "FEMA flood zone", gis.flood_zones.length > 0],
     ["#5CA8FF", "Protected / public land", gis.protected_lands.length > 0],
-    ["#35C78F", "Alt. route", !!run.report?.alternatives[0]?.geometry],
   ];
   return entries.filter(([, , shown]) => shown).map(([color, label]) => [color, label]);
 }
@@ -81,7 +79,13 @@ export default function RunPage({ params }: { params: { id: string } }) {
           setEvents((prev) => [...prev, event]);
         };
         source.onerror = () => {
-          // EventSource retries automatically; only fail hard if run vanished
+          // EventSource retries transient drops by itself. CLOSED means the
+          // server refused the stream (e.g. the run vanished after a redeploy
+          // wiped the database) — it will never reconnect, so stop waiting.
+          if (source.readyState === EventSource.CLOSED && !cancelled) {
+            setErrorMsg("Lost the connection to the analysis engine and the run could not be resumed. Start a new analysis.");
+            setPhase("error");
+          }
         };
       } catch {
         if (!cancelled) {
@@ -346,7 +350,6 @@ export default function RunPage({ params }: { params: { id: string } }) {
                       zoom={14}
                       marker={[run.gis.site.lat, run.gis.site.lon]}
                       gis={run.gis}
-                      altRoute={run.report.alternatives[0]?.geometry ?? null}
                     />
                   </div>
                 </Card>

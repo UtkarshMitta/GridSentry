@@ -76,9 +76,6 @@ export interface Habitat {
   common_name: string;
   status: string;
   unit_name: string;
-  distance_m: number | null;
-  bearing: string | null;
-  geometry: GeoJSONGeometry | null;
   basis: string; // ipac_species_list | critical_habitat | proposed_critical_habitat
   currently_listed: boolean;
   source: string;
@@ -159,7 +156,6 @@ export interface Alternative {
   title: string;
   description: string;
   impact_reduction: string;
-  geometry: GeoJSONGeometry | null;
 }
 
 export interface CriticNote {

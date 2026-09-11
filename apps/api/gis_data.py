@@ -102,20 +102,16 @@ SPECIES_BY_STATE: dict[str, list] = {
     **{s: SPECIES_PLAINS for s in ("TX", "OK", "KS", "NE", "SD", "ND")},
 }
 
-# State wetland regulatory classes for the headline protected wetland.
-# Keyed by USPS state code; each entry is (class label, managing agency).
-STATE_WETLAND_PROGRAMS: dict[str, tuple[str, str]] = {
-    "NY": ("NYS Class I (6 NYCRR 664)", "NYS Department of Environmental Conservation"),
-    "NJ": ("Exceptional Resource Value (N.J.A.C. 7:7A-3.2)", "NJ Department of Environmental Protection"),
-    "CT": ("Inland wetland (CGS § 22a-36 et seq.)", "CT DEEP / municipal inland wetlands agency"),
-    "MA": ("Bordering Vegetated Wetland (310 CMR 10.55)", "MassDEP / local conservation commission"),
-    "PA": ("Exceptional Value wetland (25 Pa. Code Ch. 105)", "PA Department of Environmental Protection"),
+# State agency named as the manager of the simulated conservation-land placeholder.
+STATE_ENVIRONMENTAL_AGENCIES: dict[str, str] = {
+    "NY": "NYS Department of Environmental Conservation",
+    "NJ": "NJ Department of Environmental Protection",
+    "CT": "CT DEEP / municipal inland wetlands agency",
+    "MA": "MassDEP / local conservation commission",
+    "PA": "PA Department of Environmental Protection",
 }
+DEFAULT_ENVIRONMENTAL_AGENCY = "State environmental agency (unverified)"
 SIMULATED_SOURCE = "SIMULATED placeholder — live service unreachable, not a real finding"
-DEFAULT_WETLAND_PROGRAM = (
-    "State-regulated wetland (program unverified — confirm with state agency)",
-    "State environmental agency (unverified)",
-)
 
 
 def _seed_for(lat: float, lon: float) -> int:
@@ -251,7 +247,7 @@ def _simulated_payload(
     county = jurisdiction.county or "the surrounding county"
     locality = jurisdiction.locality or jurisdiction.county or "Proposed Site"
     state_code = jurisdiction.state_code
-    _, wetland_agency = STATE_WETLAND_PROGRAMS.get(state_code or "", DEFAULT_WETLAND_PROGRAM)
+    wetland_agency = STATE_ENVIRONMENTAL_AGENCIES.get(state_code or "", DEFAULT_ENVIRONMENTAL_AGENCY)
     site = site or _build_site(site_input, jurisdiction)
     half_m = geodata.half_width_m(site.acreage)
 
@@ -313,9 +309,6 @@ def _simulated_payload(
             common_name=common,
             status=status,
             unit_name="Simulated species-list placeholder (IPaC unreachable)",
-            distance_m=None,
-            bearing=None,
-            geometry=None,
             basis="ipac_species_list",
             source=SIMULATED_SOURCE,
         )

@@ -47,10 +47,9 @@ def _fallback(gis: GISPayload) -> dict[str, Any]:
     for h in gis.habitats:
         if h.basis == "critical_habitat":
             sev = "high"
-            where = f"{h.distance_m / 1000:.1f} km {h.bearing}" if h.distance_m is not None else "overlapping the location"
             note = (
                 f"Designated critical habitat for {h.common_name} ({h.species}, {h.status}) "
-                f"{where}. Action area under ESA §7 plausibly reaches this unit."
+                "overlaps the project footprint. The ESA §7 action area reaches this unit."
             )
         elif h.currently_listed:
             sev = "moderate"

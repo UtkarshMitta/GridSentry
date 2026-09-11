@@ -47,8 +47,6 @@ PADUS_URL = (
     "Manager_Name/FeatureServer/0/query"
 )
 
-EARTH_R = 6_371_000.0
-
 # ESA listing-status codes IPaC returns → (human label, subject to ESA §7
 # consultation as a listed species). Nonessential experimental populations are
 # treated as *proposed* for §7 purposes (ESA §10(j)(2)(C)), and
@@ -345,8 +343,9 @@ def _sid_key(sid: Any) -> Optional[str]:
 async def _fetch_species(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float
 ) -> Optional[list[Habitat]]:
-    # The project footprint square (IPaC wants an area).
-    d = max(half_m, 400) / 111_320
+    # The project footprint square itself: crithab hits are reported as
+    # "intersecting the footprint", so the query area must be exactly that.
+    d = half_m / 111_320
     dlon = d / max(math.cos(math.radians(lat)), 0.1)
     footprint = {
         "type": "Polygon",
@@ -408,9 +407,6 @@ async def _fetch_species(
                     "critical_habitat": "Designated critical habitat overlaps the project footprint",
                     "proposed_critical_habitat": "Proposed critical habitat overlaps the project footprint",
                 }.get(basis, "IPaC official species list — may be present in the action area"),
-                distance_m=None,
-                bearing=None,
-                geometry=None,
                 basis=basis,
                 currently_listed=is_listed,
                 source="USFWS IPaC (live query)",
@@ -535,20 +531,42 @@ PADUS_DESIGNATIONS = {
 async def _fetch_protected(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float
 ) -> Optional[list[ProtectedLand]]:
-    params = _arcgis_point_params(lat, lon, 5000, "Unit_Nm,Des_Tp,Loc_Ds,Mang_Name,Mang_Type,GAP_Sts")
-    params["resultRecordCount"] = 25
-    try:
+    fields = "Unit_Nm,Des_Tp,Loc_Ds,Mang_Name,Mang_Type,GAP_Sts"
+    # Suburban areas hold hundreds of PAD-US records within 5 km, returned in
+    # arbitrary order, so a capped "nearby" query can miss the unit the site
+    # sits in. Query units intersecting the footprint separately (few, never
+    # capped away), plus a capped nearby query for context.
+    dlat = half_m / 111_320
+    dlon = half_m / _m_per_deg_lon(lat)
+    overlap_params = _arcgis_point_params(lat, lon, 0, fields)
+    overlap_params.pop("distance")
+    overlap_params.pop("units")
+    overlap_params.update(
+        geometry=json.dumps({"xmin": lon - dlon, "ymin": lat - dlat, "xmax": lon + dlon, "ymax": lat + dlat,
+                             "spatialReference": {"wkid": 4326}}),
+        geometryType="esriGeometryEnvelope",
+        resultRecordCount=200,
+    )
+    nearby_params = _arcgis_point_params(lat, lon, 5000, fields)
+    nearby_params["resultRecordCount"] = 25
+
+    async def query(params: dict[str, Any]) -> list[dict[str, Any]]:
         resp = await client.get(PADUS_URL, params=params)
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
-            return None
-        feats = data.get("features", [])
+            raise ValueError(data["error"])
+        return data.get("features", [])
+
+    try:
+        overlapping, nearby = await asyncio.gather(query(overlap_params), query(nearby_params))
     except Exception:
         return None
+    feats = overlapping + nearby
 
     # PAD-US stacks several records per place (fee, easement, designation);
-    # keep one per unit name, preferring the most protective GAP status.
+    # merge them per unit name: most protective GAP status, any footprint
+    # overlap, and the nearest distance/bearing among the records.
     best: dict[str, ProtectedLand] = {}
     for i, f in enumerate(feats):
         a = f.get("attributes", {})
@@ -578,10 +596,17 @@ async def _fetch_protected(
             source="USGS PAD-US (live query)",
         )
         prev = best.get(name)
-        if prev is None or (land.gap_status or "9") < (prev.gap_status or "9") or (
-            land.overlaps_footprint and not prev.overlaps_footprint
-        ):
+        if prev is None:
             best[name] = land
+            continue
+        base = land if (land.gap_status or "9") < (prev.gap_status or "9") else prev
+        near = land if land.distance_m < prev.distance_m else prev
+        best[name] = base.model_copy(update={
+            "overlaps_footprint": prev.overlaps_footprint or land.overlaps_footprint,
+            "distance_m": near.distance_m,
+            "bearing": near.bearing,
+            "geometry": near.geometry,
+        })
     out = sorted(best.values(), key=lambda p: (not p.overlaps_footprint, p.distance_m))
     return out[:4]
 
@@ -621,5 +646,4 @@ async def fetch_all(
         "flood_zones": flood or [],
         "protected_lands": protected or [],
         "provenance": provenance,
-        "half_m": half_m,
     }

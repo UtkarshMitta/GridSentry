@@ -178,9 +178,6 @@ CITATIONS: dict[str, Citation] = {
     ]
 }
 
-# PAD-US designation codes the Land Status Gate treats as barring development.
-BARRED_CODES = ("NP", "WA", "WSA", "NM", "NWR", "NRA", "NS", "NLS", "NCA", "WSR", "RNA")
-
 # Organic/administration statute for each federal land manager.
 AGENCY_LAW = {"NPS": ["nps-organic"], "FWS": ["nwrs-improvement"], "BLM": ["flpma"]}
 
@@ -426,37 +423,21 @@ Only cite the state regulations for the state provided — never another state's
 If the state is marked UNVERIFIED, cite no state law at all. Never describe a
 layer listed as "not assessed" as clean or free of constraints."""
 
-# State wetland regimes, keyed by resolved USPS state code (from the
-# grounding step — never inferred from coordinates here).
-STATE_REGIMES: dict[str, dict[str, object]] = {
-    "NY": {
-        "citations": ["nycrr-663", "ecl-24"],
-        "buffer": "regulated 100-ft adjacent area",
-        "permit": "an Article 24 Freshwater Wetlands permit from NYS DEC",
-        "standard": "Class I wetlands carry the most stringent 'compatibility' standard and permits are rarely granted for avoidable encroachments",
-    },
-    "NJ": {
-        "citations": ["njsa-13-9b", "njac-77a"],
-        "buffer": "regulated transition area (up to 150 ft for Exceptional Resource Value wetlands)",
-        "permit": "an FWPA individual permit and transition-area waiver from NJDEP — note NJDEP administers the federal § 404 program in-state under assumed authority",
-        "standard": "Exceptional Resource Value wetlands carry the largest transition areas and the most demanding avoidance/minimization showing",
-    },
+# State wetland statutes, keyed by USPS state code of a *verified*
+# jurisdiction (from the grounding step — never inferred from coordinates).
+STATE_WETLAND_CITES: dict[str, list[str]] = {
+    "NY": ["nycrr-663", "ecl-24"],
+    "NJ": ["njsa-13-9b", "njac-77a"],
 }
-GENERIC_REGIME: dict[str, object] = {
-    "citations": ["eo-11990"],
-    "buffer": "any state-regulated buffer or adjacent area",
-    "permit": "the applicable state wetland permit (program unverified — confirm with the state environmental agency)",
-    "standard": "federal actions affecting wetlands additionally trigger avoidance obligations under E.O. 11990",
-}
+# Unverified or other states: only the federal wetland-avoidance order.
+GENERIC_WETLAND_CITES = ["eo-11990"]
 
 
-def _regime(gis: GISPayload) -> dict[str, object]:
-    """State wetland regime — only for a *verified* jurisdiction. An
-    unverified state never drives state-law citations (see grounding.py)."""
-    jur = gis.site.jurisdiction
+def state_wetland_cites(jur) -> list[str]:
+    """State wetland citations — only for a *verified* jurisdiction."""
     if not jur.verified:
-        return GENERIC_REGIME
-    return STATE_REGIMES.get(jur.state_code or "", GENERIC_REGIME)
+        return GENERIC_WETLAND_CITES
+    return STATE_WETLAND_CITES.get(jur.state_code or "", GENERIC_WETLAND_CITES)
 
 
 LAYER_LABELS = {
@@ -495,7 +476,6 @@ def build_sections(gis: GISPayload, geo: dict[str, Any]) -> tuple[list[ReportSec
     that did not answer is reported as NOT ASSESSED — never as clean.
     Distances, crossings, and risk come from the actual geometry.
     """
-    regime = _regime(gis)
     jur = gis.site.jurisdiction
     prov = gis.provenance
     obs_by_id = {o["feature_id"]: o for o in geo["observations"]}
@@ -531,7 +511,7 @@ def build_sections(gis: GISPayload, geo: dict[str, Any]) -> tuple[list[ReportSec
     # Partition wetlands into those the footprint overlaps vs merely nearby.
     crossing = [w for w in gis.wetlands if w.crosses_footprint]
     nearby = [w for w in gis.wetlands if not w.crosses_footprint]
-    state_cites: list[str] = list(regime["citations"])  # type: ignore[arg-type]
+    state_cites = state_wetland_cites(jur)
     # Vegetated wetlands (marsh/forested/scrub) are higher-value and harder to
     # permit than open-water/excavated ponds; a footprint conflict with the
     # former is HIGH, with only the latter it is MODERATE (designable-around).
@@ -965,7 +945,6 @@ def build_sections(gis: GISPayload, geo: dict[str, Any]) -> tuple[list[ReportSec
                     "wetland and its buffer. Recovers most nameplate capacity through block reconfiguration."
                 ),
                 impact_reduction="Removes the CWA § 404 footprint conflict; converts the wetlands section from HIGH toward LOW.",
-                geometry=None,
             ),
             Alternative(
                 id="alt-2",
@@ -987,12 +966,6 @@ def build_sections(gis: GISPayload, geo: dict[str, Any]) -> tuple[list[ReportSec
                     f.title = SIMULATED_TAG + f.title
 
     return sections, alternatives, sorted(used)
-
-
-STATE_REG_LABELS = {
-    "NY": "6 NYCRR Part 663 and ECL Article 24",
-    "NJ": "the NJ Freshwater Wetlands Protection Act (N.J.S.A. 13:9B) and N.J.A.C. 7:7A",
-}
 
 
 def _fallback_summary(gis: GISPayload, sections: list[ReportSection]) -> str:

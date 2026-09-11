@@ -133,7 +133,7 @@ labelled "(assumed)" in the report, and flagged by the Red-Team Critic. Every
 ## Tests
 
 ```bash
-npm run test:api    # 85 offline tests: parsers on recorded payloads, gates, report logic, API/SSE
+npm run test:api    # 90 offline tests: parsers on recorded payloads, gates, report logic, API/SSE
 npm run test:web    # 21 coordinate-input parsing tests (Node >= 22.18, no extra deps)
 npm run test:live   # opt-in: full pipeline against the live federal services
 ```

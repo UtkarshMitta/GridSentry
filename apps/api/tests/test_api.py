@@ -115,3 +115,20 @@ def test_pipeline_exception_surfaces_as_error(client, monkeypatch):
     events = sse_events(client, run_id)
     assert events[-1]["type"] == "error" and "kaboom" in events[-1]["message"]
     assert wait_complete(client, run_id)["status"] == "error"
+
+
+def test_persistence_failure_surfaces_as_error_not_complete(client, monkeypatch):
+    """If saving the finished run fails, subscribers must get an error promptly —
+    not hang, and not a 'complete' for a run that was never stored."""
+    real_update = db.update_run
+
+    def failing_update(run_id, **fields):
+        if fields.get("status") in ("complete", "error"):
+            raise db.sqlite3.OperationalError("attempt to write a readonly database")
+        return real_update(run_id, **fields)
+
+    monkeypatch.setattr(db, "update_run", failing_update)
+    run_id = client.post("/runs", json={"lat": 42.9, "lon": -74.3}).json()["run_id"]
+    events = sse_events(client, run_id)
+    assert events[-1]["type"] == "error"
+    assert not any(e["type"] == "complete" for e in events)

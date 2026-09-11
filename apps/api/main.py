@@ -79,24 +79,30 @@ async def _emit(run_id: str, event: Optional[dict[str, Any]]) -> None:
 
 
 async def _execute(run_id: str, site_input: SiteInput) -> None:
+    complete = {"type": "complete", "progress": 1.0}
     try:
-        gis, report = await orchestrator.run_pipeline(
-            run_id, site_input, lambda e: _emit(run_id, e)
-        )
-        _events[run_id].append({"type": "complete", "progress": 1.0})
-        db.update_run(
-            run_id,
-            status="complete",
-            gis=gis.model_dump(),
-            report=report.model_dump(),
-            events=_events[run_id],
-        )
-    except Exception as exc:  # surface pipeline failures to the client
-        _events[run_id].append({"type": "error", "message": str(exc) or type(exc).__name__})
-        db.update_run(run_id, status="error", events=_events[run_id])
-    # Wake SSE subscribers only after the DB reflects the terminal state, so a
-    # client that fetches the run on 'complete' never sees it still running.
-    await _emit(run_id, None)
+        try:
+            gis, report = await orchestrator.run_pipeline(
+                run_id, site_input, lambda e: _emit(run_id, e)
+            )
+            # Persist before publishing 'complete', so a client that fetches
+            # the run on 'complete' never finds it missing or still running.
+            db.update_run(
+                run_id,
+                status="complete",
+                gis=gis.model_dump(),
+                report=report.model_dump(),
+                events=_events[run_id] + [complete],
+            )
+            _events[run_id].append(complete)
+        except Exception as exc:  # pipeline or persistence failure → error event
+            _events[run_id].append({"type": "error", "message": str(exc) or type(exc).__name__})
+            try:
+                db.update_run(run_id, status="error", events=_events[run_id])
+            except Exception:
+                pass  # storage is down too; live subscribers still get the error
+    finally:
+        await _emit(run_id, None)  # always wake SSE subscribers
     await asyncio.sleep(BUFFER_TTL_S)
     _events.pop(run_id, None)
     _conditions.pop(run_id, None)
@@ -162,11 +168,16 @@ async def stream_events(run_id: str) -> StreamingResponse:
                 yield f"data: {json.dumps(event)}\n\n"
                 if event["type"] in ("complete", "error"):
                     return
+            # Never yield while holding the lock: a stalled client would block
+            # the pipeline's _emit (which needs the same lock).
+            timed_out = False
             async with cond:
                 try:
                     await asyncio.wait_for(cond.wait(), timeout=30)
                 except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
+                    timed_out = True
+            if timed_out:
+                yield ": keepalive\n\n"
 
     return StreamingResponse(
         generator(),

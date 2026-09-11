@@ -5,13 +5,12 @@ import {
   CircleMarker,
   GeoJSON,
   MapContainer,
-  Polyline,
   Popup,
   TileLayer,
   useMap,
   useMapEvents,
 } from "react-leaflet";
-import type { GISPayload, GeoJSONGeometry } from "@/lib/types";
+import type { GISPayload } from "@/lib/types";
 import "leaflet/dist/leaflet.css";
 
 // Keyless dark basemap. (CARTO's dark_all tiles now require an API key and
@@ -32,7 +31,6 @@ export interface SiteMapProps {
   marker?: [number, number] | null;
   onPick?: (lat: number, lon: number) => void;
   gis?: GISPayload | null;
-  altRoute?: GeoJSONGeometry | null;
   interactive?: boolean;
   className?: string;
 }
@@ -56,17 +54,12 @@ function FlyTo({ target, zoom }: { target: [number, number]; zoom: number }) {
   return null;
 }
 
-function lineCoords(geometry: GeoJSONGeometry): [number, number][] {
-  return (geometry.coordinates as [number, number][]).map(([lon, lat]) => [lat, lon]);
-}
-
 export default function SiteMapInner({
   center,
   zoom = 13,
   marker,
   onPick,
   gis,
-  altRoute,
   interactive = true,
   className,
 }: SiteMapProps) {
@@ -136,29 +129,6 @@ export default function SiteMapInner({
               </Popup>
             </GeoJSON>
           ))}
-          {gis.habitats
-            .filter((h) => h.geometry && (h.geometry.coordinates as unknown[])?.length)
-            .map((h) => (
-              <GeoJSON
-                key={h.id}
-                data={h.geometry as GeoJSON.GeoJsonObject}
-                style={{ color: "#E8B25A", weight: 1.5, dashArray: "4 4", fillOpacity: 0.14 }}
-              >
-                <Popup>
-                  <strong>{h.common_name}</strong> <em>({h.species})</em>
-                  <br />
-                  {h.status} — {h.unit_name}
-                  {h.distance_m != null && (
-                    <>
-                      <br />
-                      {(h.distance_m / 1000).toFixed(1)} km {h.bearing}
-                    </>
-                  )}
-                  <br />
-                  <em>{h.source}</em>
-                </Popup>
-              </GeoJSON>
-            ))}
           {gis.protected_lands.map((p) => (
             <GeoJSON
               key={p.id}
@@ -194,14 +164,6 @@ export default function SiteMapInner({
         </>
       )}
 
-      {altRoute && (
-        <Polyline
-          positions={lineCoords(altRoute)}
-          pathOptions={{ color: "#35C78F", weight: 3, dashArray: "8 6", opacity: 0.9 }}
-        >
-          <Popup>Alternative routing corridor</Popup>
-        </Polyline>
-      )}
     </MapContainer>
   );
 }

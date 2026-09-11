@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import land_status
 from agents import critic, legal
 
 API = Path(__file__).resolve().parents[1]
@@ -17,9 +18,9 @@ def test_every_referenced_citation_id_exists():
     ids = set()
     for block in re.findall(r"citation_ids=\[([^\]]*)\]", src) + re.findall(r"cite\(([^)]*)\)", src):
         ids |= set(re.findall(r'"([a-z0-9]+(?:-[a-z0-9]+)+)"', block))
-    for regime in list(legal.STATE_REGIMES.values()) + [legal.GENERIC_REGIME]:
-        ids |= set(regime["citations"])
-    for code in legal.BARRED_CODES:
+    for cites in list(legal.STATE_WETLAND_CITES.values()) + [legal.GENERIC_WETLAND_CITES]:
+        ids |= set(cites)
+    for code in land_status.BARRED_DESIGNATIONS:
         for mgr in ("NPS", "FWS", "BLM", "USFS", None):
             ids |= set(legal.federal_cites(code, mgr))
     missing = ids - set(legal.CITATIONS)

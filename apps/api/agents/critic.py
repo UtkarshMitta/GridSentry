@@ -53,7 +53,7 @@ def infeasible_review(gis: GISPayload) -> dict[str, Any]:
     """Red-team content for a Land-Status-gated (non-developable) site."""
     ls = gis.site.land_status
     if ls.category == "outside_coverage":
-        return _out_of_coverage_review(gis)
+        return _out_of_coverage_review()
     if ls.category in ("urban_built", "open_water"):
         return _unbuildable_review(gis)
     from .legal import federal_cites  # local import: legal imports this module
@@ -172,7 +172,7 @@ def _unbuildable_review(gis: GISPayload) -> dict[str, Any]:
     }
 
 
-def _out_of_coverage_review(gis: GISPayload) -> dict[str, Any]:
+def _out_of_coverage_review() -> dict[str, Any]:
     """Red-team content for coordinates outside U.S. state jurisdiction."""
     notes = [
         CriticNote(
@@ -191,7 +191,7 @@ def _out_of_coverage_review(gis: GISPayload) -> dict[str, Any]:
     return {"notes": [n.model_dump() for n in notes], "stop_work_risks": [], "confidence": 90}
 
 
-def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
+def _fallback(gis: GISPayload) -> dict[str, Any]:
     jur = gis.site.jurisdiction
     prov = gis.provenance
     crossing = [w for w in gis.wetlands if w.crosses_footprint]
@@ -334,11 +334,14 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
-    # State permit label + citations follow the resolved jurisdiction.
-    state_permit = {
-        "NY": ("an Article 24 Freshwater Wetlands permit", ["nycrr-663", "ecl-24"]),
-        "NJ": ("an NJDEP Freshwater Wetlands / transition-area permit", ["njsa-13-9b", "njac-77a"]),
-    }.get(jur.state_code if jur.verified else "", ("the applicable state wetland permit", ["eo-11990"]))
+    # State permit label + citations follow the *verified* jurisdiction.
+    from .legal import state_wetland_cites  # local import: legal imports this module
+
+    permit_label = {
+        "NY": "an Article 24 Freshwater Wetlands permit",
+        "NJ": "an NJDEP Freshwater Wetlands / transition-area permit",
+    }.get(jur.state_code if jur.verified else "", "the applicable state wetland permit")
+    state_permit = (permit_label, state_wetland_cites(jur))
     stop_work: list[StopWorkRisk] = []
     if crossing:
         head = next((w for w in crossing if is_vegetated_wetland(w.classification)), crossing[0])
@@ -460,7 +463,7 @@ def score_risk(gis: GISPayload) -> tuple[str, int]:
 
 
 async def run(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
-    fallback = _fallback(gis, legal)
+    fallback = _fallback(gis)
     # Provenance + grounding-integrity notes are never overridden by the LLM.
     pinned_ids = ("cn-prov", "cn-jur", "cn-land-check")
     grounding_notes = [n for n in fallback["notes"] if n["id"] in pinned_ids]

@@ -71,3 +71,12 @@ async def test_failed_lookups_are_not_cached():
     j = await resolve(httpx.Response(200, json=NY_ADDR),
                       httpx.Response(200, json=census("New York", "NY")), 30.0, -90.0)
     assert j.verified
+
+
+async def test_transient_census_failure_is_not_cached():
+    """One Census timeout must not pin a site as unverified (state law withheld) until restart."""
+    j = await resolve(httpx.Response(200, json=NY_ADDR), httpx.Response(503), 43.1, -75.2)
+    assert not j.verified
+    j = await resolve(httpx.Response(200, json=NY_ADDR),
+                      httpx.Response(200, json=census("New York", "NY", "Oneida County")), 43.1, -75.2)
+    assert j.verified and j.county == "Oneida County"

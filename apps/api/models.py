@@ -94,9 +94,6 @@ class Habitat(BaseModel):
     common_name: str
     status: str                  # "Endangered" | "Threatened" | proposed/candidate label
     unit_name: str
-    distance_m: Optional[float] = None   # only when a mapped critical-habitat polygon exists
-    bearing: Optional[str] = None
-    geometry: Optional[dict[str, Any]] = None
     basis: str = "ipac_species_list"     # ipac_species_list | critical_habitat | proposed_critical_habitat
     currently_listed: bool = True        # False for proposed/candidate/non-§7 taxa (e.g. NEP, SAT)
     source: str = "USFWS Critical Habitat (ECOS)"
@@ -189,7 +186,6 @@ class Alternative(BaseModel):
     title: str
     description: str
     impact_reduction: str
-    geometry: Optional[dict[str, Any]] = None  # GeoJSON LineString or Polygon
 
 
 class CriticNote(BaseModel):

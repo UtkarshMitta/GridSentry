@@ -8,8 +8,8 @@ Two failure modes this module exists to prevent:
    state counts as verified. An optional Tavily web search adds sources on
    the state's wetland program.
 2. Fabricated named entities — invented "official-sounding" feature names.
-   Names are verified against the web via Tavily; unverified names are
-   flagged so downstream agents and the report treat them as placeholders.
+   NWI polygons are unnamed in the source data, so wetlands get descriptive
+   labels flagged name_verified=False; PAD-US unit names are real.
 
 Every network call degrades gracefully: no key / no network → explicit
 "unverified" status, never a silent guess.
@@ -46,10 +46,6 @@ STATE_CODES = {
     "montana": "MT", "wyoming": "WY", "idaho": "ID", "new mexico": "NM",
     "alaska": "AK", "hawaii": "HI",
 }
-
-
-def tavily_available() -> bool:
-    return bool(os.environ.get("TAVILY_API_KEY"))
 
 
 async def _tavily_search(query: str, max_results: int = 3) -> Optional[list[dict[str, Any]]]:
@@ -216,22 +212,10 @@ async def resolve_jurisdiction(lat: float, lon: float) -> Jurisdiction:
                 country_code=None, verified=False, method="unresolved", sources=[],
             )
 
-    # Only cache answers the services actually gave — a transient outage must
-    # not pin this site to "unresolved" for the life of the process.
-    if jurisdiction.method not in ("bbox-fallback", "unresolved") or jurisdiction.in_coverage is False:
+    # Only cache when both services answered — a transient outage of either
+    # must not pin this site to an unverified/unresolved jurisdiction for the
+    # life of the process.
+    if nom_status != "failed" and cen_status != "failed":
         _jurisdiction_cache[cache_key] = jurisdiction
     return jurisdiction
 
-
-async def verify_feature_name(name: str, state: Optional[str]) -> bool:
-    """Check whether a named feature actually exists in the real world.
-    Returns False (unverified) unless web results plausibly match the name."""
-    if not name or not tavily_available():
-        return False
-    results = await _tavily_search(f'"{name}" {state or ""} wetland OR conservation OR wildlife', 3)
-    if not results:
-        return False
-    name_l = name.lower()
-    return any(
-        name_l in (r.get("title", "") + r.get("content", "")).lower() for r in results
-    )
