@@ -27,6 +27,8 @@ from models import Jurisdiction
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
 TAVILY_URL = "https://api.tavily.com/search"
+# Nominatim country codes covered by the U.S. federal datasets (states + territories).
+US_COUNTRY_CODES = ("us", "pr", "gu", "vi", "as", "mp", "um")
 TIMEOUT = 12.0
 
 _jurisdiction_cache: dict[str, Jurisdiction] = {}
@@ -131,7 +133,9 @@ def _bbox_fallback(lat: float, lon: float) -> Optional[tuple[str, str]]:
 
 async def resolve_jurisdiction(lat: float, lon: float) -> Jurisdiction:
     """Determine which state/county the site actually falls in."""
-    cache_key = f"{round(lat, 3)}:{round(lon, 3)}"
+    # Full precision: a coarse key would let two points either side of a state
+    # line share one (verified) jurisdiction.
+    cache_key = f"{lat:.6f}:{lon:.6f}"
     if cache_key in _jurisdiction_cache:
         return _jurisdiction_cache[cache_key]
 
@@ -139,6 +143,9 @@ async def resolve_jurisdiction(lat: float, lon: float) -> Jurisdiction:
         _reverse_geocode(lat, lon), _census_lookup(lat, lon)
     )
     nom_us = nom_status == "ok" and address.get("country_code") == "us" and address.get("state")
+    # Nominatim positively placed the point in another country (U.S. territories,
+    # which the federal datasets do cover, are not "foreign").
+    nom_foreign = nom_status == "ok" and address.get("country_code") not in (None, *US_COUNTRY_CODES)
     sources: list[dict[str, str]] = []
 
     if cen_status == "ok" or nom_us:
@@ -163,8 +170,9 @@ async def resolve_jurisdiction(lat: float, lon: float) -> Jurisdiction:
             })
             state, state_code = census["state"], census["state_code"]
             county = census["county"] or county
-            if nom_us and nom_code != state_code:
-                # Border sites: two sources disagree → never guess.
+            if nom_status == "ok" and nom_code != state_code:
+                # Border sites: two sources disagree (including Nominatim
+                # placing the point outside the U.S.) → never guess.
                 verified, method = False, "conflict"
             else:
                 verified, method = True, ("nominatim+census" if nom_us else "census")
@@ -190,9 +198,10 @@ async def resolve_jurisdiction(lat: float, lon: float) -> Jurisdiction:
             state=state, state_code=state_code, county=county, locality=locality,
             country_code="us", verified=verified, method=method, in_coverage=True, sources=sources,
         )
-    elif cen_status == "no_result" and nom_status in ("ok", "no_result"):
-        # Both services answered and neither places the point in a U.S. state:
-        # a foreign country, or open ocean beyond state waters.
+    elif nom_foreign or (cen_status == "no_result" and nom_status == "no_result"):
+        # Positively outside U.S. coverage: Nominatim resolved a foreign
+        # country (even if the Census lookup failed), or both services answered
+        # with nothing (open ocean beyond state waters).
         foreign = address.get("country_code") if nom_status == "ok" else None
         jurisdiction = Jurisdiction(
             state=None, state_code=None, county=None, locality=None,

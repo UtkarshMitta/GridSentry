@@ -218,3 +218,58 @@ async def test_ipac_is_queried_with_the_exact_footprint():
     ring = json.loads(json.loads(route.calls[0].request.content)["location.footprint"])["coordinates"][0]
     half_height_m = (ring[2][1] - ring[0][1]) / 2 * 111_320
     assert half_height_m == pytest.approx(100, abs=1)
+
+
+# --- Copilot review regressions ------------------------------------------------
+
+async def test_large_footprint_widens_the_search_radius():
+    """A 5,000-acre footprint has corners ~3.2 km out; the old fixed 1.6 km NWI /
+    1.2 km FEMA radii would never see wetlands or floodplain in its outer part."""
+    half = geodata.half_width_m(5000)
+    with respx.mock:
+        nwi = respx.get(geodata.NWI_URL).mock(return_value=httpx.Response(200, json={"features": []}))
+        fema = respx.get(geodata.FEMA_URL).mock(return_value=httpx.Response(200, json={"features": []}))
+        async with httpx.AsyncClient() as client:
+            await geodata._fetch_wetlands(client, LAT, LON, half, None)
+            await geodata._fetch_flood(client, LAT, LON, half)
+    corner = half * 2 ** 0.5
+    assert float(nwi.calls[0].request.url.params["distance"]) > corner
+    assert float(fema.calls[0].request.url.params["distance"]) > corner
+
+
+async def test_truncated_results_are_paged_to_completion():
+    """ArcGIS caps a page at maxRecordCount; the features past it must be fetched."""
+    page1 = {"features": [_fema_feature("AE", None, esri_square(LAT, LON, 900, 0, 20))], "exceededTransferLimit": True}
+    page2 = {"features": [_fema_feature("A", None, esri_square(LAT, LON, 0, 0, 100))]}
+
+    def paged(request):
+        return httpx.Response(200, json=page1 if request.url.params["resultOffset"] == "0" else page2)
+
+    with respx.mock:
+        respx.get(geodata.FEMA_URL).mock(side_effect=paged)
+        async with httpx.AsyncClient() as client:
+            zones = await geodata._fetch_flood(client, LAT, LON, 300)
+    assert {z.zone for z in zones} == {"AE", "A"}
+    assert any(z.overlaps_footprint for z in zones)   # the in-footprint zone was on page 2
+
+
+async def test_layer_too_large_to_fetch_is_unavailable_not_truncated():
+    endless = {"features": [_fema_feature("AE", None, esri_square(LAT, LON, 900, 0, 20))], "exceededTransferLimit": True}
+    with respx.mock:
+        respx.get(geodata.FEMA_URL).mock(return_value=httpx.Response(200, json=endless))
+        async with httpx.AsyncClient() as client:
+            assert await geodata._fetch_flood(client, LAT, LON, 300) is None
+
+
+async def test_padus_merge_draws_the_overlapping_record():
+    """If one record overlaps (at a corner, 700 m out) and a same-name record is nearer
+    but outside, the merged unit must show the overlapping geometry and distance."""
+    corner = _padus_feature("Split Park", "4", esri_square(LAT, LON, 520, 520, 30))
+    near_outside = _padus_feature("Split Park", "4", esri_square(LAT, LON, 0, 560, 20))  # 540 m N, outside
+    with respx.mock:
+        respx.get(geodata.PADUS_URL).mock(
+            return_value=httpx.Response(200, json={"features": [near_outside, corner]}))
+        async with httpx.AsyncClient() as client:
+            [park] = await geodata._fetch_protected(client, LAT, LON, 500)
+    assert park.overlaps_footprint
+    assert park.distance_m > 600          # distance of the overlapping (corner) record

@@ -8,7 +8,7 @@ import { ReportPanel } from "@/components/report-panel";
 import { SiteMap } from "@/components/site-map";
 import { Badge, Button, Card, Skeleton, riskTone } from "@/components/ui";
 import { eventsUrl, getRun } from "@/lib/api";
-import { isSimulated, verdictLabel } from "@/lib/report";
+import { isSimulated, riskHeadline, verdictLabel } from "@/lib/report";
 import type { PipelineEvent, Run } from "@/lib/types";
 
 type Phase = "connecting" | "running" | "complete" | "error";
@@ -172,9 +172,17 @@ export default function RunPage({ params }: { params: { id: string } }) {
                       ▲ Simulated data · no real risk score
                     </Badge>
                   ) : (
-                    <Badge tone={riskTone(run.report.risk_level)} className="uppercase">
-                      {run.report.risk_level} risk · {run.report.risk_score}/100
-                    </Badge>
+                    (() => {
+                      const risk = riskHeadline(run);
+                      return (
+                        <Badge
+                          tone={risk.incomplete ? "amber" : riskTone(run.report.risk_level)}
+                          className="uppercase"
+                        >
+                          {risk.text}
+                        </Badge>
+                      );
+                    })()
                   )}
                   {(() => {
                     const j = run.gis.site.jurisdiction;

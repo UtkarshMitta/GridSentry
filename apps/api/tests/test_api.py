@@ -87,7 +87,7 @@ def test_sse_replays_after_completion(client):
 
 @pytest.mark.parametrize("body", [
     {"lat": 91, "lon": 0}, {"lat": 0, "lon": 181}, {"lat": 0, "lon": 0, "project_type": "coal"},
-    {"lat": 0, "lon": 0, "acreage": 0}, {"lat": 0, "lon": 0, "acreage": -5},
+    {"lat": 0, "lon": 0, "acreage": 0}, {"lat": 0, "lon": 0, "acreage": -5}, {"lat": 0, "lon": 0, "acreage": 0.04},
 ])
 def test_invalid_input_rejected(client, body):
     assert client.post("/runs", json=body).status_code == 422

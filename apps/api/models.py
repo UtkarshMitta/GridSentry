@@ -19,7 +19,7 @@ class SiteInput(BaseModel):
     name: Optional[str] = None
     # Proposed project footprint in acres. Optional: when omitted a fixed,
     # clearly-labelled default is assumed (never a per-coordinate guess).
-    acreage: Optional[float] = Field(default=None, gt=0, le=50_000)
+    acreage: Optional[float] = Field(default=None, ge=1, le=50_000)
 
 
 class Jurisdiction(BaseModel):

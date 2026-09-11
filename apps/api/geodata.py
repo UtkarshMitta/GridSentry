@@ -35,6 +35,9 @@ LAYER_DEADLINE = 30.0
 # positional accuracy (tens of metres).
 GEOMETRY_OFFSET_DEG = 0.00005
 COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+# Minimum search radii (m); both grow with the footprint via _search_radius_m.
+NWI_SEARCH_M = 1600
+FEMA_SEARCH_M = 1200
 
 NWI_URL = (
     "https://fwspublicservices.wim.usgs.gov/wetlandsmapservice/rest/services/"
@@ -64,6 +67,32 @@ LISTING_STATUS = {
 }
 
 T = TypeVar("T")
+
+
+# Pages fetched per layer before giving up. A footprint whose result set is
+# larger is reported as not assessed rather than silently truncated.
+MAX_PAGES = 5
+
+
+def _search_radius_m(half_m: float, base_m: float, buffer_m: float) -> float:
+    """Cover the whole square footprint (corners at half_m·√2) plus a buffer."""
+    return max(base_m, half_m * math.sqrt(2) + buffer_m)
+
+
+async def _query_all(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+    """Run an ArcGIS query, paging past maxRecordCount until complete."""
+    feats: list[dict[str, Any]] = []
+    for _ in range(MAX_PAGES):
+        resp = await client.get(url, params={**params, "resultOffset": len(feats)})
+        resp.raise_for_status()
+        data = resp.json()
+        if "error" in data:
+            raise ValueError(data["error"])
+        batch = data.get("features", [])
+        feats += batch
+        if not data.get("exceededTransferLimit") or not batch:
+            return feats
+    raise ValueError(f"more than {len(feats)} features — too many to assess completely")
 
 
 async def _with_deadline(coro: Awaitable[Optional[T]]) -> Optional[T]:
@@ -283,15 +312,11 @@ async def _fetch_wetlands(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float, state_code: Optional[str]
 ) -> Optional[list[Wetland]]:
     params = _arcgis_point_params(
-        lat, lon, 1600, "Wetlands.ATTRIBUTE,Wetlands.WETLAND_TYPE,Wetlands.ACRES"
+        lat, lon, _search_radius_m(half_m, NWI_SEARCH_M, 800),
+        "Wetlands.ATTRIBUTE,Wetlands.WETLAND_TYPE,Wetlands.ACRES",
     )
     try:
-        resp = await client.get(NWI_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        if "error" in data:
-            return None
-        feats = data.get("features", [])
+        feats = await _query_all(client, NWI_URL, params)
     except Exception:
         return None
 
@@ -442,14 +467,9 @@ def _is_sfha(zone: str) -> bool:
 async def _fetch_flood(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float
 ) -> Optional[list[FloodZone]]:
-    params = _arcgis_point_params(lat, lon, 1200, "FLD_ZONE,ZONE_SUBTY")
+    params = _arcgis_point_params(lat, lon, _search_radius_m(half_m, FEMA_SEARCH_M, 400), "FLD_ZONE,ZONE_SUBTY")
     try:
-        resp = await client.get(FEMA_URL, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        if "error" in data:
-            return None
-        feats = data.get("features", [])
+        feats = await _query_all(client, FEMA_URL, params)
     except Exception:
         return None
 
@@ -545,13 +565,14 @@ async def _fetch_protected(
         geometry=json.dumps({"xmin": lon - dlon, "ymin": lat - dlat, "xmax": lon + dlon, "ymax": lat + dlat,
                              "spatialReference": {"wkid": 4326}}),
         geometryType="esriGeometryEnvelope",
-        resultRecordCount=200,
     )
     nearby_params = _arcgis_point_params(lat, lon, 5000, fields)
     nearby_params["resultRecordCount"] = 25
 
-    async def query(params: dict[str, Any]) -> list[dict[str, Any]]:
-        resp = await client.get(PADUS_URL, params=params)
+    async def nearby_query() -> list[dict[str, Any]]:
+        # Deliberately capped: nearby units are context only; every unit that
+        # touches the footprint comes from the complete (paged) overlap query.
+        resp = await client.get(PADUS_URL, params=nearby_params)
         resp.raise_for_status()
         data = resp.json()
         if "error" in data:
@@ -559,14 +580,17 @@ async def _fetch_protected(
         return data.get("features", [])
 
     try:
-        overlapping, nearby = await asyncio.gather(query(overlap_params), query(nearby_params))
+        overlapping, nearby = await asyncio.gather(
+            _query_all(client, PADUS_URL, overlap_params), nearby_query()
+        )
     except Exception:
         return None
     feats = overlapping + nearby
 
     # PAD-US stacks several records per place (fee, easement, designation);
     # merge them per unit name: most protective GAP status, any footprint
-    # overlap, and the nearest distance/bearing among the records.
+    # overlap, and the geometry/distance of the nearest *overlapping* record
+    # (or the nearest record when none overlaps) so map and text agree.
     best: dict[str, ProtectedLand] = {}
     for i, f in enumerate(feats):
         a = f.get("attributes", {})
@@ -600,7 +624,8 @@ async def _fetch_protected(
             best[name] = land
             continue
         base = land if (land.gap_status or "9") < (prev.gap_status or "9") else prev
-        near = land if land.distance_m < prev.distance_m else prev
+        shown = [r for r in (prev, land) if r.overlaps_footprint] or [prev, land]
+        near = min(shown, key=lambda r: r.distance_m)
         best[name] = base.model_copy(update={
             "overlaps_footprint": prev.overlaps_footprint or land.overlaps_footprint,
             "distance_m": near.distance_m,

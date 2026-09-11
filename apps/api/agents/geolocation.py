@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import geodata
 from models import GISPayload
 
 from . import llm
@@ -121,7 +122,8 @@ def _fallback(gis: GISPayload) -> dict[str, Any]:
             "the centroid — a setback consideration, not a footprint conflict."
         )
     else:
-        lead = "No NWI wetland polygons were returned within 1.6 km of the site."
+        radius = geodata._search_radius_m(geodata.half_width_m(gis.site.acreage), geodata.NWI_SEARCH_M, 800)
+        lead = f"No NWI wetland polygons were returned within {radius / 1000:.1f} km of the site."
     if prov.species != "live" and not prov.any_simulated:
         sp = " Species were NOT screened: the IPaC service did not respond."
     elif crithab:

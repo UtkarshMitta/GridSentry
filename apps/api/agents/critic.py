@@ -266,6 +266,24 @@ def _fallback(gis: GISPayload) -> dict[str, Any]:
                 ),
             )
         )
+    if not ls.land_cover_checked:
+        outside_conus = jur.state_code in ("AK", "HI") or jur.country_code not in (None, "us")
+        why = (
+            "NLCD 2021 covers only the contiguous U.S." if outside_conus
+            else "the NLCD land-cover query was unavailable"
+        )
+        notes.append(
+            CriticNote(
+                id="cn-cover",
+                severity="warning",
+                target="report",
+                note=(
+                    f"Physical buildability was NOT verified: {why}. The footprint was not screened "
+                    "for dense urban development or open water — confirm against current imagery "
+                    "that the site is open land."
+                ),
+            )
+        )
     # Analytical red-team notes, conditional on what the live data returned.
     if crossing:
         head = next((w for w in crossing if is_vegetated_wetland(w.classification)), crossing[0])

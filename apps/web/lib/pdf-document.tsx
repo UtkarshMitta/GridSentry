@@ -6,7 +6,7 @@ import {
   Text,
   View,
 } from "@react-pdf/renderer";
-import { isSimulated, reportLevelNotes, verdictLabel } from "./report";
+import { isSimulated, reportLevelNotes, riskHeadline, verdictLabel } from "./report";
 import type { Report, Run } from "./types";
 
 const RISK_COLORS: Record<string, string> = {
@@ -94,8 +94,13 @@ export function ReportPDF({ run }: { run: Run }) {
             ) : report.developable ? (
               <>
                 Overall risk:{" "}
-                <Text style={{ color: RISK_COLORS[report.risk_level], fontWeight: 700 }}>
-                  {report.risk_level.toUpperCase()} ({report.risk_score}/100)
+                <Text
+                  style={{
+                    color: riskHeadline(run).incomplete ? "#B9770E" : RISK_COLORS[report.risk_level],
+                    fontWeight: 700,
+                  }}
+                >
+                  {riskHeadline(run).text.toUpperCase()}
                 </Text>
               </>
             ) : (

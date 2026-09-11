@@ -16,6 +16,31 @@ export function isSimulated(run: Run): boolean {
   return !!p && Object.values(p).includes("simulated");
 }
 
+/** Environmental layers whose live service did not answer on this run. */
+export function unassessedLayers(run: Run): string[] {
+  const p = run.gis?.provenance;
+  if (!p) return [];
+  const labels = { wetlands: "NWI", species: "IPaC", flood: "FEMA", protected: "PAD-US" } as const;
+  return (Object.keys(labels) as (keyof typeof labels)[])
+    .filter((k) => p[k] === "unavailable")
+    .map((k) => labels[k]);
+}
+
+/**
+ * Headline risk text. With layers missing, a LOW/MODERATE score only reflects
+ * the data that answered, so it is not shown as a clean verdict; a HIGH still
+ * stands because the constraint was found in live data.
+ */
+export function riskHeadline(run: Run): { text: string; incomplete: boolean } {
+  const r = run.report!;
+  const missing = unassessedLayers(run);
+  if (missing.length && r.risk_level !== "high") {
+    return { text: `Incomplete data · risk not scored (${missing.join(", ")} not assessed)`, incomplete: true };
+  }
+  const base = `${r.risk_level} risk · ${r.risk_score}/100`;
+  return { text: missing.length ? `${base} · incomplete data` : base, incomplete: false };
+}
+
 /** Short label for a Land Status Gate verdict. */
 export function verdictLabel(category: string): string {
   switch (category) {

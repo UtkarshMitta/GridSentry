@@ -80,3 +80,26 @@ async def test_transient_census_failure_is_not_cached():
     j = await resolve(httpx.Response(200, json=NY_ADDR),
                       httpx.Response(200, json=census("New York", "NY", "Oneida County")), 43.1, -75.2)
     assert j.verified and j.county == "Oneida County"
+
+
+async def test_foreign_site_is_out_of_coverage_even_when_census_is_down():
+    """Nominatim positively resolving another country is enough to gate the site."""
+    j = await resolve(httpx.Response(200, json=UK_ADDR), httpx.Response(503), 51.5, -0.12)
+    assert j.in_coverage is False and j.state is None
+
+
+async def test_census_state_contradicted_by_foreign_nominatim_is_unverified():
+    """Near a border, Census says NY but Nominatim says Canada → conflict, no state law."""
+    ca = {"address": {"state": "Ontario", "country_code": "ca"}}
+    j = await resolve(httpx.Response(200, json=ca), httpx.Response(200, json=census("New York", "NY")), 43.0, -79.05)
+    assert not j.verified and j.method == "conflict" and j.in_coverage is True
+
+
+async def test_nearby_points_across_a_state_line_are_resolved_separately():
+    """A ~30 m move must not reuse the first point's jurisdiction from the cache."""
+    a = await resolve(httpx.Response(200, json=NY_ADDR), httpx.Response(200, json=census("New York", "NY")),
+                      41.0000, -74.0000)
+    nj = {"address": {"state": "New Jersey", "country_code": "us", "county": "Bergen County"}}
+    b = await resolve(httpx.Response(200, json=nj), httpx.Response(200, json=census("New Jersey", "NJ")),
+                      41.0003, -74.0000)
+    assert (a.state_code, b.state_code) == ("NY", "NJ")

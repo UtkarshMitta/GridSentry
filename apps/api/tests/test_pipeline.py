@@ -311,3 +311,60 @@ async def test_llm_success_is_reported(monkeypatch):
     stub(monkeypatch)
     _, report, _ = await run()
     assert report.engine == "openai"
+
+
+# --- Copilot review regressions ------------------------------------------------
+
+async def test_llm_summary_not_used_when_jurisdiction_unverified(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    prompts = []
+
+    async def openai(system, user):
+        prompts.append(system)
+        return {"executive_summary": "Cites 6 NYCRR Part 663 confidently. " * 5, "summary": "x", "observations": [],
+                "notes": [], "confidence": 90}
+
+    monkeypatch.setattr(llm, "_openai", openai)
+    stub(monkeypatch, jurisdiction=jur(verified=False, method="nominatim"))
+    _, report, _ = await run()
+    assert "6 NYCRR" not in report.executive_summary
+    assert not any("Legal Compliance Officer" in p for p in prompts)
+
+
+async def test_llm_summary_not_used_when_a_layer_is_missing(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    async def openai(system, user):
+        return {"executive_summary": "The site is entirely clean on every dataset. " * 5}
+
+    monkeypatch.setattr(llm, "_openai", openai)
+    stub(monkeypatch, provenance={**ALL_LIVE, "flood": "unavailable"})
+    _, report, _ = await run()
+    assert "entirely clean" not in report.executive_summary
+    assert "NOT" in report.executive_summary   # the deterministic 'NOT assessed' wording
+
+
+async def test_summary_mentions_every_footprint_constraint(monkeypatch):
+    stub(monkeypatch,
+         habitats=[habitat("Whooping crane", basis="proposed_critical_habitat")],
+         flood_zones=[flood("AE", sfha=True, overlaps=True)],
+         protected_lands=[protected("Trust Land", gap="3", overlaps=True, dist=300, code="SOTH",
+                                    designation="State Trust Land")])
+    _, report, _ = await run()
+    s = report.executive_summary
+    assert "no footprint conflict" not in s
+    assert "proposed critical habitat" in s and "Zone AE" in s and "Trust Land" in s
+
+
+async def test_unverified_buildability_is_flagged(monkeypatch):
+    stub(monkeypatch)   # developable_status() has land_cover_checked=False
+    _, report, _ = await run()
+    note = next(n for n in report.critic_notes if n.id == "cn-cover")
+    assert "NOT verified" in note.note
+
+
+async def test_offshore_report_does_not_assume_boem_jurisdiction(monkeypatch):
+    stub(monkeypatch, jurisdiction=jur(state=None, code=None, verified=False, in_coverage=False, method="unresolved"))
+    _, report, _ = await run(30.0, -40.0)   # mid-Atlantic: international waters, not the U.S. OCS
+    assert "If these waters are on the U.S. Outer Continental Shelf" in report.executive_summary
+    assert "is governed by BOEM" not in report.executive_summary

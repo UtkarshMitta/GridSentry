@@ -22,8 +22,12 @@ const TILE_URL =
 const LABEL_URL = process.env.NEXT_PUBLIC_TILE_URL
   ? null
   : `${ESRI}/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`;
-const TILE_ATTR =
+const ESRI_ATTR =
   'Tiles &copy; <a href="https://www.esri.com">Esri</a> &mdash; Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+// A custom tile provider brings its own attribution (never show Esri's for it).
+const TILE_ATTR = process.env.NEXT_PUBLIC_TILE_URL
+  ? process.env.NEXT_PUBLIC_TILE_ATTRIBUTION || ""
+  : ESRI_ATTR;
 
 export interface SiteMapProps {
   center: [number, number];

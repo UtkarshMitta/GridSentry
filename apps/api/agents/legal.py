@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import geodata
 from models import Alternative, Citation, Finding, GISPayload, ReportSection
 
 from . import llm
@@ -381,7 +382,9 @@ def _build_out_of_coverage(gis: GISPayload) -> dict[str, Any]:
         "result here means 'no data', not 'no constraints'. No environmental assessment has been "
         "generated. "
         + ("Use the environmental review framework of the host country. "
-           if country else "Offshore energy siting is governed by BOEM under the Outer Continental Shelf Lands Act. ")
+           if country else "If these waters are on the U.S. Outer Continental Shelf, offshore energy siting "
+           "falls to BOEM under the Outer Continental Shelf Lands Act; in another nation's waters or on "
+           "the high seas, that nation's or international law applies. ")
         + "Recommended action: check the coordinates (latitude/longitude order and sign) and re-run."
     )
     sections = [
@@ -448,6 +451,11 @@ LAYER_LABELS = {
 }
 RISK_ORDER = {"none": 0, "low": 1, "moderate": 2, "high": 3}
 SIMULATED_TAG = "[SIMULATED — not a real finding] "
+
+
+def _radius_km(gis: GISPayload, base_m: float, buffer_m: float) -> str:
+    """Search radius actually used for a layer, for report text."""
+    return f"{geodata._search_radius_m(geodata.half_width_m(gis.site.acreage), base_m, buffer_m) / 1000:.1f}"
 
 
 def _max_risk(*levels: str) -> str:
@@ -603,7 +611,8 @@ def build_sections(gis: GISPayload, geo: dict[str, Any]) -> tuple[list[ReportSec
                 risk="none",
                 summary=(
                     "A live USFWS National Wetlands Inventory query returned no mapped wetland "
-                    "polygons within 1.6 km of the site. A field delineation is still prudent, but "
+                    f"polygons within {_radius_km(gis, geodata.NWI_SEARCH_M, 800)} km of the site. "
+                    "A field delineation is still prudent, but "
                     "the desktop record shows no wetland constraint at this location."
                 ),
                 findings=[],
@@ -835,7 +844,8 @@ def build_sections(gis: GISPayload, geo: dict[str, Any]) -> tuple[list[ReportSec
         else:
             flood_risk = "low"
             fl_summary = (
-                "No Special Flood Hazard Area (1%-annual-chance floodplain) is mapped within 1.2 km. "
+                "No Special Flood Hazard Area (1%-annual-chance floodplain) is mapped within "
+                f"{_radius_km(gis, geodata.FEMA_SEARCH_M, 400)} km. "
                 "Nearby FEMA zones: "
                 + "; ".join(f"Zone {z.zone} — {z.description}" for z in gis.flood_zones[:3])
                 + "."
@@ -1012,8 +1022,17 @@ def _fallback_summary(gis: GISPayload, sections: list[ReportSection]) -> str:
         constraints.append(f"designated critical habitat for the {crithab[0].common_name}")
     elif listed:
         constraints.append(f"{len(listed)} ESA-listed species on the IPaC screen (no designated critical habitat)")
+    prop_ch = [h for h in gis.habitats if h.basis == "proposed_critical_habitat"]
+    if prop_ch and not crithab:
+        constraints.append(f"proposed critical habitat for the {prop_ch[0].common_name}")
+    overlapping_land = [p for p in gis.protected_lands if p.overlaps_footprint]
     if inside_conservation:
         constraints.append(f"a footprint overlap with {inside_conservation[0].name} (protected land)")
+    elif overlapping_land:
+        constraints.append(f"a footprint overlap with {overlapping_land[0].name} ({overlapping_land[0].designation})")
+    sfha_in = [f for f in gis.flood_zones if f.sfha and f.overlaps_footprint]
+    if sfha_in:
+        constraints.append(f"FEMA base floodplain (Zone {sfha_in[0].zone}) inside the footprint")
 
     if constraints:
         constraint_clause = "Live datasets show " + "; and ".join(constraints) + "."
@@ -1023,7 +1042,8 @@ def _fallback_summary(gis: GISPayload, sections: list[ReportSection]) -> str:
     veg_crossing = [w for w in crossing if _is_vegetated(w.classification)]
     overall = (
         "an elevated permitting risk profile" if veg_crossing or crithab or inside_conservation
-        else "a moderate, designable-around risk profile" if (crossing or gis.wetlands or listed)
+        else "a moderate, designable-around risk profile"
+        if (crossing or gis.wetlands or listed or prop_ch or overlapping_land or sfha_in)
         else "a low permitting risk profile"
     )
     live = [LAYER_LABELS[k] for k in LAYER_LABELS if getattr(prov, k) == "live"]
@@ -1052,24 +1072,19 @@ async def run(gis: GISPayload, geo: dict[str, Any]) -> dict[str, Any]:
         if jur.verified and jur.state
         else "UNVERIFIED — do not cite any state law"
     )
-    result = await llm.complete_json(
-        SYSTEM,
-        f"State: {state_line}\n"
-        f"Data layers not assessed (service unavailable): {', '.join(prov.unavailable_layers()) or 'none'}\n"
-        f"Spatial analysis: {geo['summary']}\n\nObservations: {geo['observations']}\n\n"
-        f"Section conclusions: {[(s.id, s.risk, s.summary) for s in sections]}",
-    )
-    # Never let a model-written summary replace the simulated-data warning.
-    if (
-        not prov.any_simulated
-        and result
-        and isinstance(result.get("executive_summary"), str)
-        and len(result["executive_summary"]) > 100
-    ):
-        summary = result["executive_summary"]
-        missing = [LAYER_LABELS[k] for k in prov.unavailable_layers()]
-        if missing:
-            summary += f" Note: the {', '.join(missing)} layer(s) were unavailable at run time and are not assessed."
+    # A model-written summary is used only when every conclusion it could draw
+    # is supported: live data for all layers and a verified jurisdiction.
+    # Otherwise it could reintroduce state-law claims we withheld or describe
+    # an unassessed layer as clean — keep the deterministic summary instead.
+    if jur.verified and not prov.any_simulated and not prov.unavailable_layers():
+        result = await llm.complete_json(
+            SYSTEM,
+            f"State: {state_line}\n"
+            f"Spatial analysis: {geo['summary']}\n\nObservations: {geo['observations']}\n\n"
+            f"Section conclusions: {[(s.id, s.risk, s.summary) for s in sections]}",
+        )
+        if result and isinstance(result.get("executive_summary"), str) and len(result["executive_summary"]) > 100:
+            summary = result["executive_summary"]
 
     return {
         "executive_summary": summary,

@@ -40,7 +40,10 @@ kilobytes rather than 4–10 MB, and each layer has a hard deadline.
 
 Every layer carries a provenance flag (`live` / `unavailable` / `simulated` /
 `not_assessed`). A layer that did not answer is reported as **NOT ASSESSED**,
-never as clean, and blocks a Categorical Exclusion recommendation. If all live
+never as clean: it blocks a Categorical Exclusion recommendation, and the
+report shows "incomplete data" instead of a LOW/MODERATE score. Layer queries
+page through results and grow with the footprint, so large sites are covered
+in full; a layer too large to fetch completely is reported as not assessed. If all live
 services are unreachable, ingestion falls back to a clearly flagged synthetic
 payload: every feature and section is labelled SIMULATED, no review level is
 recommended, and the Red-Team Critic raises a blocker. Risk scoring is derived
@@ -133,8 +136,8 @@ labelled "(assumed)" in the report, and flagged by the Red-Team Critic. Every
 ## Tests
 
 ```bash
-npm run test:api    # 90 offline tests: parsers on recorded payloads, gates, report logic, API/SSE
-npm run test:web    # 21 coordinate-input parsing tests (Node >= 22.18, no extra deps)
+npm run test:api    # 103 offline tests: parsers on recorded payloads, gates, report logic, API/SSE
+npm run test:web    # 25 tests: coordinate parsing, risk headline (Node >= 22.18, no extra deps)
 npm run test:live   # opt-in: full pipeline against the live federal services
 ```
 
@@ -184,13 +187,14 @@ API_URL             = https://gridsentry-api.onrender.com   # used by the server
 setting it. CORS is already open on the API (`allow_origins=["*"]`).
 
 The map uses Esri's keyless World Dark Gray basemap (CARTO's `dark_all` tiles
-now need an API key). Set `NEXT_PUBLIC_TILE_URL` to use another tile provider
-(see `apps/web/.env.example`).
+now need an API key). Set `NEXT_PUBLIC_TILE_URL` (and that provider's
+`NEXT_PUBLIC_TILE_ATTRIBUTION`) to use another tile provider (see
+`apps/web/.env.example`).
 
 Runs are stored in SQLite (`apps/api/gridsentry.db`). On Render's free plan the
 disk is ephemeral, so saved runs disappear on redeploy. If the API restarts
-mid-run with no client connected, that run is marked "interrupted" rather than
-left hanging.
+mid-run with no client connected, that run is marked as an error with the
+message "Run interrupted…" rather than left hanging.
 
 ## Demo script
 
