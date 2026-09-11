@@ -65,6 +65,22 @@ def update_run(run_id: str, **fields: Any) -> None:
         conn.commit()
 
 
+def fail_orphaned_runs(message: str) -> int:
+    """Mark runs a previous process left 'running' as errored. Returns the count."""
+    with _lock:
+        conn = _get_conn()
+        rows = conn.execute("SELECT id, events_json FROM runs WHERE status = 'running'").fetchall()
+        for row in rows:
+            events = json.loads(row["events_json"] or "[]")
+            events.append({"type": "error", "message": message})
+            conn.execute(
+                "UPDATE runs SET status = 'error', events_json = ? WHERE id = ?",
+                (json.dumps(events), row["id"]),
+            )
+        conn.commit()
+    return len(rows)
+
+
 def get_run(run_id: str) -> Optional[dict[str, Any]]:
     with _lock:
         row = _get_conn().execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()

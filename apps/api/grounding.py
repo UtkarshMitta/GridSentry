@@ -2,8 +2,11 @@
 
 Two failure modes this module exists to prevent:
 1. Jurisdiction mismatch — citing New York regulations for a New Jersey
-   site. Jurisdiction is resolved by reverse geocoding (Nominatim/OSM),
-   cross-checked with a Tavily web search of the state's wetland program.
+   site. Jurisdiction is resolved by reverse geocoding (Nominatim/OSM) and
+   cross-checked against the U.S. Census Bureau's TIGER boundaries (the
+   authoritative state/county geography — free, no key). Only a Census-backed
+   state counts as verified. An optional Tavily web search adds sources on
+   the state's wetland program.
 2. Fabricated named entities — invented "official-sounding" feature names.
    Names are verified against the web via Tavily; unverified names are
    flagged so downstream agents and the report treat them as placeholders.
@@ -13,7 +16,7 @@ Every network call degrades gracefully: no key / no network → explicit
 """
 from __future__ import annotations
 
-import math
+import asyncio
 import os
 from typing import Any, Optional
 
@@ -22,6 +25,7 @@ import httpx
 from models import Jurisdiction
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
+CENSUS_URL = "https://geocoding.geo.census.gov/geocoder/geographies/coordinates"
 TAVILY_URL = "https://api.tavily.com/search"
 TIMEOUT = 12.0
 
@@ -70,8 +74,13 @@ async def _tavily_search(query: str, max_results: int = 3) -> Optional[list[dict
         return None
 
 
-async def _reverse_geocode(lat: float, lon: float) -> Optional[dict[str, Any]]:
-    """Nominatim reverse geocode → address dict, or None on failure."""
+# Lookup outcomes: ("ok", data) | ("no_result", None) — the service answered
+# that nothing is there (ocean / foreign) | ("failed", None) — no answer.
+Lookup = tuple[str, Optional[dict[str, Any]]]
+
+
+async def _reverse_geocode(lat: float, lon: float) -> Lookup:
+    """Nominatim reverse geocode → address dict."""
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             resp = await client.get(
@@ -81,9 +90,36 @@ async def _reverse_geocode(lat: float, lon: float) -> Optional[dict[str, Any]]:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data.get("address")
     except Exception:
-        return None
+        return "failed", None
+    address = data.get("address")
+    return ("ok", address) if address else ("no_result", None)
+
+
+async def _census_lookup(lat: float, lon: float) -> Lookup:
+    """U.S. Census geocoder → {"state", "state_code", "county"} from TIGER boundaries."""
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            resp = await client.get(
+                CENSUS_URL,
+                params={
+                    "x": lon, "y": lat, "benchmark": "Public_AR_Current",
+                    "vintage": "Current_Current", "layers": "States,Counties", "format": "json",
+                },
+            )
+            resp.raise_for_status()
+            geos = resp.json()["result"]["geographies"]
+    except Exception:
+        return "failed", None
+    states = geos.get("States") or []
+    if not states:
+        return "no_result", None
+    counties = geos.get("Counties") or []
+    return "ok", {
+        "state": states[0].get("NAME"),
+        "state_code": states[0].get("STUSAB"),
+        "county": (counties[0].get("NAME") or None) if counties else None,
+    }
 
 
 def _bbox_fallback(lat: float, lon: float) -> Optional[tuple[str, str]]:
@@ -103,44 +139,68 @@ async def resolve_jurisdiction(lat: float, lon: float) -> Jurisdiction:
     if cache_key in _jurisdiction_cache:
         return _jurisdiction_cache[cache_key]
 
-    address = await _reverse_geocode(lat, lon)
+    (nom_status, address), (cen_status, census) = await asyncio.gather(
+        _reverse_geocode(lat, lon), _census_lookup(lat, lon)
+    )
+    nom_us = nom_status == "ok" and address.get("country_code") == "us" and address.get("state")
     sources: list[dict[str, str]] = []
 
-    if address and address.get("country_code") == "us" and address.get("state"):
-        state = address["state"]
-        state_code = STATE_CODES.get(state.lower()) or address.get("ISO3166-2-lvl4", "US-??").split("-")[-1]
-        county = address.get("county")
-        locality = (
-            address.get("town") or address.get("city") or address.get("village")
-            or address.get("hamlet") or address.get("municipality")
-        )
-        sources.append({
-            "title": "OpenStreetMap Nominatim reverse geocoding",
-            "url": f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}",
-        })
+    if cen_status == "ok" or nom_us:
+        locality = county = None
+        nom_state = nom_code = None
+        if nom_us:
+            nom_state = address["state"]
+            nom_code = STATE_CODES.get(nom_state.lower()) or address.get("ISO3166-2-lvl4", "US-??").split("-")[-1]
+            county = address.get("county")
+            locality = (
+                address.get("town") or address.get("city") or address.get("village")
+                or address.get("hamlet") or address.get("municipality")
+            )
+            sources.append({
+                "title": "OpenStreetMap Nominatim reverse geocoding",
+                "url": f"https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}",
+            })
+        if cen_status == "ok":
+            sources.append({
+                "title": "U.S. Census Bureau TIGER boundaries (Census Geocoder)",
+                "url": f"https://geocoding.geo.census.gov/geocoder/geographies/coordinates?x={lon}&y={lat}&benchmark=Public_AR_Current&vintage=Current_Current&layers=States,Counties&format=json",
+            })
+            state, state_code = census["state"], census["state_code"]
+            county = census["county"] or county
+            if nom_us and nom_code != state_code:
+                # Border sites: two sources disagree → never guess.
+                verified, method = False, "conflict"
+            else:
+                verified, method = True, ("nominatim+census" if nom_us else "census")
+        else:
+            state, state_code = nom_state, nom_code
+            verified, method = False, "nominatim"
 
-        # Cross-check the state's wetland regulatory program via Tavily.
-        verified = False
-        method = "nominatim"
-        results = await _tavily_search(
-            f"{state} state freshwater wetlands regulation permit program statute site:gov OR official"
-        )
-        if results:
-            state_l = state.lower()
-            if any(
-                state_l in (r.get("title", "") + r.get("content", "") + r.get("url", "")).lower()
-                for r in results
-            ):
-                verified = True
-                method = "nominatim+tavily"
-                sources += [
-                    {"title": r.get("title", "Web source"), "url": r.get("url", "")}
-                    for r in results[:2]
-                ]
+        if verified:
+            # Optional: corroborate the state's wetland program on the web.
+            results = await _tavily_search(
+                f"{state} state freshwater wetlands regulation permit program statute site:gov OR official"
+            )
+            state_l = (state or "").lower()
+            hits = [
+                r for r in results or []
+                if state_l in (r.get("title", "") + r.get("content", "") + r.get("url", "")).lower()
+            ]
+            if hits:
+                method += "+tavily"
+                sources += [{"title": r.get("title", "Web source"), "url": r.get("url", "")} for r in hits[:2]]
 
         jurisdiction = Jurisdiction(
             state=state, state_code=state_code, county=county, locality=locality,
-            country_code="us", verified=verified, method=method, sources=sources,
+            country_code="us", verified=verified, method=method, in_coverage=True, sources=sources,
+        )
+    elif cen_status == "no_result" and nom_status in ("ok", "no_result"):
+        # Both services answered and neither places the point in a U.S. state:
+        # a foreign country, or open ocean beyond state waters.
+        foreign = address.get("country_code") if nom_status == "ok" else None
+        jurisdiction = Jurisdiction(
+            state=None, state_code=None, county=None, locality=None,
+            country_code=foreign, verified=False, method="unresolved", in_coverage=False, sources=[],
         )
     else:
         fallback = _bbox_fallback(lat, lon)
@@ -156,7 +216,10 @@ async def resolve_jurisdiction(lat: float, lon: float) -> Jurisdiction:
                 country_code=None, verified=False, method="unresolved", sources=[],
             )
 
-    _jurisdiction_cache[cache_key] = jurisdiction
+    # Only cache answers the services actually gave — a transient outage must
+    # not pin this site to "unresolved" for the life of the process.
+    if jurisdiction.method not in ("bbox-fallback", "unresolved") or jurisdiction.in_coverage is False:
+        _jurisdiction_cache[cache_key] = jurisdiction
     return jurisdiction
 
 

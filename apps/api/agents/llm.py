@@ -6,6 +6,7 @@ the demo must never break because of a missing key or a flaky API.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 from typing import Any, Optional
@@ -14,8 +15,13 @@ import httpx
 
 TIMEOUT = 25.0
 
+# Whether any LLM call succeeded in the current pipeline run. Each run is its
+# own asyncio task, so a ContextVar keeps concurrent runs separate.
+_succeeded: contextvars.ContextVar[bool] = contextvars.ContextVar("llm_succeeded", default=False)
+
 
 def engine() -> str:
+    """The configured provider (a key is present), not necessarily one that answered."""
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -23,16 +29,37 @@ def engine() -> str:
     return "deterministic"
 
 
+def begin_run() -> None:
+    _succeeded.set(False)
+
+
+def mark_success() -> None:
+    _succeeded.set(True)
+
+
+def engine_used() -> str:
+    """Engine label for the report: only claim an LLM if one actually answered."""
+    configured = engine()
+    if configured == "deterministic" or _succeeded.get():
+        return configured
+    return f"deterministic ({configured} unavailable)"
+
+
 async def complete_json(system: str, user: str) -> Optional[dict[str, Any]]:
     """Ask the LLM for a JSON object. Returns None if unavailable/failed."""
     which = engine()
     try:
         if which == "openai":
-            return await _openai(system, user)
-        if which == "anthropic":
-            return await _anthropic(system, user)
+            result = await _openai(system, user)
+        elif which == "anthropic":
+            result = await _anthropic(system, user)
+        else:
+            return None
     except Exception:
         return None
+    if isinstance(result, dict):
+        mark_success()
+        return result
     return None
 
 
@@ -64,13 +91,13 @@ async def _anthropic(system: str, user: str) -> Optional[dict[str, Any]]:
                 "anthropic-version": "2023-06-01",
             },
             json={
-                "model": os.environ.get("ANTHROPIC_MODEL", "claude-3-5-haiku-latest"),
+                "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5"),
                 "max_tokens": 2048,
                 "system": system + "\nRespond ONLY with a valid JSON object.",
                 "messages": [{"role": "user", "content": user}],
             },
         )
         resp.raise_for_status()
-        text = resp.json()["content"][0]["text"]
+        text = next(b["text"] for b in resp.json()["content"] if b.get("type") == "text")
         start, end = text.find("{"), text.rfind("}")
         return json.loads(text[start : end + 1])

@@ -29,7 +29,7 @@ from typing import Any, Optional
 
 import httpx
 
-from models import LandStatus
+from models import Jurisdiction, LandStatus
 
 PADUS_URL = (
     "https://services.arcgis.com/v01gqwM5QqNysAAi/arcgis/rest/services/"
@@ -38,6 +38,8 @@ PADUS_URL = (
 NLCD_WMS_URL = "https://www.mrlc.gov/geoserver/mrlc_display/wms"
 NLCD_LAYER = "NLCD_2021_Land_Cover_L48"
 TIMEOUT = 15.0
+# Hard wall-clock limit per check (httpx timeouts are per network operation).
+CHECK_DEADLINE = 25.0
 
 # NLCD 2021 legend (Anderson Level II codes actually present in the product)
 NLCD_LABELS: dict[int, str] = {
@@ -80,8 +82,11 @@ BARRED_DESIGNATIONS: dict[str, str] = {
     "RNA": "Research Natural Area",
     "NRA": "National Recreation Area",
     "NS": "National Seashore",
+    "NLS": "National Lakeshore or Seashore",
     "NCA": "National Conservation Area",
 }
+# Most restrictive first when a point sits in several overlapping units.
+DESIGNATION_PRIORITY = {"NP": 0, "WA": 1, "WSA": 1, "NM": 2, "NWR": 2}
 # Manager agencies whose flagship units are treated as non-developable when
 # combined with a barred designation.
 FEDERAL_AGENCIES = {"NPS", "FWS", "USFS", "BLM", "DOD"}
@@ -126,10 +131,12 @@ def _classify(attrs: dict[str, Any]) -> Optional[LandStatus]:
     mang = (attrs.get("Mang_Name") or "").strip()
     own_type = (attrs.get("Own_Type") or "").strip()
     unit = (attrs.get("Unit_Nm") or attrs.get("Loc_Nm") or "Federal protected area").strip()
-    loc_ds = (attrs.get("Loc_Ds") or BARRED_DESIGNATIONS.get(des_tp, "protected area")).strip()
 
     if des_tp in BARRED_DESIGNATIONS and (mang in FEDERAL_AGENCIES or own_type == "FED"):
         agency = AGENCY_NAMES.get(mang, mang or "a federal agency")
+        # Label from the designation code: PAD-US Loc_Ds is free text
+        # ("WILDERNESS AREA", "Proposed") and unsafe to key citations on.
+        desig = BARRED_DESIGNATIONS[des_tp]
         return LandStatus(
             developable=False,
             category="federal_protected",
@@ -137,12 +144,13 @@ def _classify(attrs: dict[str, Any]) -> Optional[LandStatus]:
             manager=agency,
             manager_code=mang,
             unit_name=unit,
-            designation=loc_ds,
+            designation=desig,
+            designation_code=des_tp,
             gap_status=str(attrs.get("GAP_Sts") or ""),
             verified=True,
             method="padus",
             sources=[
-                {"title": f"USGS PAD-US — {unit} ({loc_ds}, {agency})",
+                {"title": f"USGS PAD-US — {unit} ({desig}, {agency})",
                  "url": "https://www.usgs.gov/programs/gap-analysis-project/science/pad-us-data-overview"},
             ],
         )
@@ -196,9 +204,12 @@ async def _nlcd_point(client: httpx.AsyncClient, lat: float, lon: float) -> Opti
         features = resp.json().get("features", [])
         if not features:
             return None
-        return int(features[0]["properties"]["PALETTE_INDEX"])
+        cls = int(features[0]["properties"]["PALETTE_INDEX"])
     except Exception:
         return None
+    # 0 / 250 / 255 etc. are no-data (outside the CONUS raster, e.g. offshore),
+    # not a land-cover class — never let them count as "buildable".
+    return cls if cls in NLCD_LABELS else None
 
 
 async def _sample_footprint_cover(
@@ -276,6 +287,7 @@ def _fallback(lat: float, lon: float) -> Optional[LandStatus]:
                 manager_code=agency,
                 unit_name=unit,
                 designation=desig,
+                designation_code="NP",
                 gap_status="",
                 verified=False,
                 method="offline-bbox",
@@ -292,8 +304,8 @@ async def check(lat: float, lon: float, acreage: float = 300.0) -> LandStatus:
     buildability). Ownership takes precedence when both trip.
     """
     features, cover = await asyncio.gather(
-        _query_padus(lat, lon),
-        _sample_footprint_cover(lat, lon, acreage),
+        _deadline(_query_padus(lat, lon)),
+        _deadline(_sample_footprint_cover(lat, lon, acreage)),
     )
 
     # --- Check 1: ownership (PAD-US) ---
@@ -301,13 +313,12 @@ async def check(lat: float, lon: float, acreage: float = 300.0) -> LandStatus:
     if features is not None:
         # Real data reached. Prefer the most restrictive matching feature.
         best: Optional[LandStatus] = None
-        priority = {"NP": 0, "WA": 1, "WSA": 1, "NM": 2, "NWR": 2}
         for f in features:
             status = _classify(f.get("attributes", {}))
             if status is None:
                 continue
-            if best is None or priority.get(f["attributes"].get("Des_Tp", ""), 9) < priority.get(
-                _rev_desig(best.designation), 9
+            if best is None or DESIGNATION_PRIORITY.get(status.designation_code or "", 9) < DESIGNATION_PRIORITY.get(
+                best.designation_code or "", 9
             ):
                 best = status
         if best is not None:
@@ -390,10 +401,30 @@ def _apply_cover(status: LandStatus, classes: list[int]) -> None:
     status.water_fraction = stats["water_fraction"]
 
 
-def _rev_desig(loc_ds: Optional[str]) -> str:
-    if not loc_ds:
-        return ""
-    for code, label in BARRED_DESIGNATIONS.items():
-        if label.lower() in loc_ds.lower():
-            return code
-    return ""
+async def _deadline(coro):
+    try:
+        return await asyncio.wait_for(coro, CHECK_DEADLINE)
+    except Exception:  # includes asyncio.TimeoutError
+        return None
+
+
+def outside_coverage(jurisdiction: Jurisdiction) -> LandStatus:
+    """Gate for coordinates positively outside U.S. state jurisdiction.
+
+    Every environmental layer (NWI, IPaC, FEMA, PAD-US, NLCD) is a U.S.
+    dataset; an empty answer for London or the open Atlantic means "no
+    coverage", not "no constraints". Reporting such a site as clean would be
+    the most dangerous output this tool could produce.
+    """
+    where = "open ocean / beyond U.S. state waters" if not jurisdiction.country_code else "outside the United States"
+    return LandStatus(
+        developable=False,
+        category="outside_coverage",
+        designation=f"No U.S. state jurisdiction — {where}",
+        verified=True,
+        method="census+nominatim",
+        sources=[
+            {"title": "U.S. Census Bureau Geocoder — no state or county at these coordinates",
+             "url": "https://geocoding.geo.census.gov/geocoder/"},
+        ],
+    )

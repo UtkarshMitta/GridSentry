@@ -1,0 +1,284 @@
+{
+ "resources": {
+  "allReferencedPopulationsBySid": {
+   "Population$Sid[67]": {
+    "groupCode": "B",
+    "groupName": "Birds",
+    "listingStatusCode": "E",
+    "listingStatusName": "Endangered",
+    "optionalCommonName": "Whooping crane",
+    "optionalListingStatusDescription": "A species in danger of extinction throughout all or a significant portion of its range",
+    "optionalPopulationDescription": "Wherever found, except where listed as an experimental population",
+    "optionalScientificName": "Grus americana",
+    "optionalSpeciesDescription": "The whooping crane occurs only in North America and is North America\u0092s tallest bird, with males approaching 1.5 m (5 ft) when standing erect. The whooping crane adult plumage is snowy white except for black primaries, black or grayish alula (specialized feathers attached to the upper leading end of the wing), sparse black bristly feathers on the carmine crown and malar region (side of the head from the bill to the angle of the jaw), and a dark gray-black wedge-shaped patch on the nape.  The common name &#34;whooping crane&#34; probably originated from the loud, single-note vocalization given repeatedly by the birds when they are alarmed. Whooping cranes are a long-lived species; current estimates suggest a maximum longevity in the wild of at least 30 years.\n\nWhooping cranes currently exist in the wild at 3 locations and in captivity at 12 sites. The July 2010 total wild population was estimated at 383.  There is only one self-sustaining wild population, the Aransas-Wood Buffalo National Park population, which nests in Wood Buffalo National Park and adjacent areas in Canada, and winters in coastal marshes in Texas at Aransas.  In addition, there is a small captive-raised, non-migratory population in central Florida, and a small migratory population of individuals introduced beginning in 2001 that migrate between Wisconsin and Florida in an eastern migratory population. The last remaining wild bird in the reintroduced Rocky Mountain Population died in the spring of 2002. The captive population contained 152 birds in July, 2010, with annual production from the Calgary Zoo, International Crane Foundation, Patuxent Wildlife Research Center, Audubon Species Survival Center, and the San Antonio Zoo. The total population of wild and captive whooping cranes in July, 2010, was 535.\n",
+    "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc3703.jpg",
+    "shortName": "Whooping crane",
+    "sid": {
+     "id": 67,
+     "val": "Population$Sid[67]"
+    },
+    "speciesId": 758,
+    "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/758"
+   },
+   "Population$Sid[131]": {
+    "groupCode": "B",
+    "groupName": "Birds",
+    "listingStatusCode": "T",
+    "listingStatusName": "Threatened",
+    "optionalCommonName": "Piping Plover",
+    "optionalListingStatusDescription": "A species likely to become endangered within the foreseeable future throughout all or a significant portion of its range",
+    "optionalPopulationDescription": "[Atlantic Coast and Northern Great Plains populations] - Wherever found, except those areas where listed as endangered.",
+    "optionalScientificName": "Charadrius melodus",
+    "optionalSpeciesDescription": "Size: 18 cm (7.25 in) in length. Color: Breeding season: Pale brown above, lighter below; black band across forehead; bill orange with black tip; legs orange; white rump. Male: Complete or incomplete black band encircles the body at the breast. Female: Paler head band; incomplete breast band. Winter coloration: Bill black; all birds lack breast band and head band.",
+    "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc3770.jpg",
+    "shortName": "Piping Plover",
+    "sid": {
+     "id": 131,
+     "val": "Population$Sid[131]"
+    },
+    "speciesId": 6039,
+    "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/6039"
+   },
+   "Population$Sid[4243]": {
+    "groupCode": "E",
+    "groupName": "Fishes",
+    "listingStatusCode": "E",
+    "listingStatusName": "Endangered",
+    "optionalCommonName": "Peppered chub",
+    "optionalListingStatusDescription": "A species in danger of extinction throughout all or a significant portion of its range",
+    "optionalPopulationDescription": "Wherever found",
+    "optionalScientificName": "Macrhybopsis tetranema",
+    "optionalSpeciesDescription": "The peppered chub is a small minnow with a fusiform (tapering at both ends) body shape rapidly tapering to a conical head. Mouth position is inferior and horizontal, with two distinct pairs of barbels present. Taste buds are present over most of the body. Pigment is nearly confined to the dorsal half of the body with dark spots scattered across this area. The lateral stripe is poorly defined and centered one scale row above lateral line. Small pale areas are often present at the posterior and anterior base of the dorsal fin. The head has pigment over the brain; a preorbital bar is present, but often indistinct. Dorsal fin rays are weakly pigmented and darker at the bases. Pigmentation is lacking on pectoral, pelvic, and anal fins. The caudal fin has a white ventral border; the rays are poorly pigmented, and coloration is darker at the base of each caudal lobe. Adults attain a maximum length of 3 inches (77 millimeters). Eight fin rays are typically present in the dorsal, anal, and pelvic fin, although this is somewhat variable. Anal and dorsal fins are slightly falcate (curved or hooked); pelvic fins are rounded; pectoral fins are long, falcate, and just reaching the bases of the pelvic fins in adult males. Adult females have shorter and pointed pectoral fins, usually not reaching the pelvic fin bases. Pectoral rays (2-10) are greatly thickened in large nuptial males, bearing rows of small, conical, antrorse (pointing forward) tubercles. Basal parts of rays bear 1-2 rows of tubercles. Females are without tubercles.",
+    "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc7078.JPG",
+    "shortName": "Peppered chub",
+    "sid": {
+     "id": 4243,
+     "val": "Population$Sid[4243]"
+    },
+    "speciesId": 532,
+    "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/532"
+   },
+   "Population$Sid[10710]": {
+    "groupCode": "I",
+    "groupName": "Insects",
+    "listingStatusCode": "PT",
+    "listingStatusName": "Proposed Threatened",
+    "optionalCommonName": "Monarch butterfly",
+    "optionalListingStatusDescription": "Species proposed for official listing as threatened",
+    "optionalPopulationDescription": "Wherever found",
+    "optionalScientificName": "Danaus plexippus",
+    "optionalSpeciesDescription": "<p>For information on monarch conservation, visit https://www.fws.gov/initiative/pollinators/monarchs, http://www.mafwa.org/?page_id&#61;2347, and, for the West, https://wafwa.org/committees-working-groups/monarch-working-group/.</p> \n<p></p> \n<p></p> \n<p></p> \n<p></p> \n<p>Adult monarch butterflies are large and conspicuous, with bright orange wings surrounded by a black border and covered with black veins. The black border has a double row of white spots, present on the upper side of the wings. Adult monarchs are sexually dimorphic, with males having narrower wing venation and scent patches. The bright coloring of a monarch serves as a warning to predators that eating them can be toxic.</p> \n<p></p> \n<p></p> \n<p>During the breeding season, monarchs lay their eggs on their obligate milkweed host plant (primarily Asclepias spp.), and larvae emerge after two to five days. Larvae develop through five larval instars (intervals between molts) over a period of 9 to 18 days, feeding on milkweed and sequestering toxic chemicals (cardenolides) as a defense against predators. The larva then pupates into a chrysalis before emerging 6 to 14 days later as an adult butterfly. There are multiple generations of monarchs produced during the breeding season, with most adult butterflies living approximately two to five weeks; overwintering adults enter into reproductive diapause (suspended reproduction) and live six to nine months.</p> \n<p></p> \n<p></p> \n<p>In many regions where monarchs are present, monarchs breed year-round. Individual monarchs in temperate climates, such as eastern and western North America, undergo long-distance migration, and live for an extended period of time. In the fall, in both eastern and western North America, monarchs begin migrating to their respective overwintering sites. This migration can take monarchs distances of over 3,000 km and last for over two months. In early spring (February-March), surviving monarchs break diapause and mate at the overwintering sites before dispersing. The same individuals that undertook the initial southward migration begin flying back through the breeding grounds and their offspring start the cycle of generational migration over again.</p> \n<p></p> \n<p></p>",
+    "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc6842.jpg",
+    "shortName": "Monarch butterfly",
+    "sid": {
+     "id": 10710,
+     "val": "Population$Sid[10710]"
+    },
+    "speciesId": 9743,
+    "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/9743"
+   }
+  },
+  "populationsBySid": {
+   "Population$Sid[10710]": {
+    "conditional": false,
+    "conditions": [],
+    "crithabInFootprint": false,
+    "optionalFederalRegisterCrithabStatus": {
+     "date": "2024-12-12T00:00Z",
+     "displayType": "Proposed",
+     "type": "Proposed",
+     "url": "https://www.govinfo.gov/link/fr/89/100662",
+     "isFileLocal": false,
+     "sid": {
+      "id": 10710,
+      "val": "Population$Sid[10710]"
+     }
+    },
+    "population": {
+     "groupCode": "I",
+     "groupName": "Insects",
+     "listingStatusCode": "PT",
+     "listingStatusName": "Proposed Threatened",
+     "optionalCommonName": "Monarch butterfly",
+     "optionalListingStatusDescription": "Species proposed for official listing as threatened",
+     "optionalPopulationDescription": "Wherever found",
+     "optionalScientificName": "Danaus plexippus",
+     "optionalSpeciesDescription": "<p>For information on monarch conservation, visit https://www.fws.gov/initiative/pollinators/monarchs, http://www.mafwa.org/?page_id&#61;2347, and, for the West, https://wafwa.org/committees-working-groups/monarch-working-group/.</p> \n<p></p> \n<p></p> \n<p></p> \n<p></p> \n<p>Adult monarch butterflies are large and conspicuous, with bright orange wings surrounded by a black border and covered with black veins. The black border has a double row of white spots, present on the upper side of the wings. Adult monarchs are sexually dimorphic, with males having narrower wing venation and scent patches. The bright coloring of a monarch serves as a warning to predators that eating them can be toxic.</p> \n<p></p> \n<p></p> \n<p>During the breeding season, monarchs lay their eggs on their obligate milkweed host plant (primarily Asclepias spp.), and larvae emerge after two to five days. Larvae develop through five larval instars (intervals between molts) over a period of 9 to 18 days, feeding on milkweed and sequestering toxic chemicals (cardenolides) as a defense against predators. The larva then pupates into a chrysalis before emerging 6 to 14 days later as an adult butterfly. There are multiple generations of monarchs produced during the breeding season, with most adult butterflies living approximately two to five weeks; overwintering adults enter into reproductive diapause (suspended reproduction) and live six to nine months.</p> \n<p></p> \n<p></p> \n<p>In many regions where monarchs are present, monarchs breed year-round. Individual monarchs in temperate climates, such as eastern and western North America, undergo long-distance migration, and live for an extended period of time. In the fall, in both eastern and western North America, monarchs begin migrating to their respective overwintering sites. This migration can take monarchs distances of over 3,000 km and last for over two months. In early spring (February-March), surviving monarchs break diapause and mate at the overwintering sites before dispersing. The same individuals that undertook the initial southward migration begin flying back through the breeding grounds and their offspring start the cycle of generational migration over again.</p> \n<p></p> \n<p></p>",
+     "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc6842.jpg",
+     "shortName": "Monarch butterfly",
+     "sid": {
+      "id": 10710,
+      "val": "Population$Sid[10710]"
+     },
+     "speciesId": 9743,
+     "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/9743"
+    },
+    "ranges": [
+     {
+      "conditional": false,
+      "fieldOfficeSid": {
+       "id": 64411,
+       "val": "FwsOffice$Sid[64411]"
+      },
+      "optionalCondition": null,
+      "seasons": []
+     }
+    ],
+    "tessDocuments": []
+   },
+   "Population$Sid[4243]": {
+    "conditional": false,
+    "conditions": [],
+    "crithabInFootprint": false,
+    "optionalFederalRegisterCrithabStatus": {
+     "date": "2022-02-28T00:00Z",
+     "displayType": "Final",
+     "type": "Final",
+     "url": "https://www.govinfo.gov/link/fr/87/11188",
+     "isFileLocal": false,
+     "sid": {
+      "id": 4243,
+      "val": "Population$Sid[4243]"
+     }
+    },
+    "population": {
+     "groupCode": "E",
+     "groupName": "Fishes",
+     "listingStatusCode": "E",
+     "listingStatusName": "Endangered",
+     "optionalCommonName": "Peppered chub",
+     "optionalListingStatusDescription": "A species in danger of extinction throughout all or a significant portion of its range",
+     "optionalPopulationDescription": "Wherever found",
+     "optionalScientificName": "Macrhybopsis tetranema",
+     "optionalSpeciesDescription": "The peppered chub is a small minnow with a fusiform (tapering at both ends) body shape rapidly tapering to a conical head. Mouth position is inferior and horizontal, with two distinct pairs of barbels present. Taste buds are present over most of the body. Pigment is nearly confined to the dorsal half of the body with dark spots scattered across this area. The lateral stripe is poorly defined and centered one scale row above lateral line. Small pale areas are often present at the posterior and anterior base of the dorsal fin. The head has pigment over the brain; a preorbital bar is present, but often indistinct. Dorsal fin rays are weakly pigmented and darker at the bases. Pigmentation is lacking on pectoral, pelvic, and anal fins. The caudal fin has a white ventral border; the rays are poorly pigmented, and coloration is darker at the base of each caudal lobe. Adults attain a maximum length of 3 inches (77 millimeters). Eight fin rays are typically present in the dorsal, anal, and pelvic fin, although this is somewhat variable. Anal and dorsal fins are slightly falcate (curved or hooked); pelvic fins are rounded; pectoral fins are long, falcate, and just reaching the bases of the pelvic fins in adult males. Adult females have shorter and pointed pectoral fins, usually not reaching the pelvic fin bases. Pectoral rays (2-10) are greatly thickened in large nuptial males, bearing rows of small, conical, antrorse (pointing forward) tubercles. Basal parts of rays bear 1-2 rows of tubercles. Females are without tubercles.",
+     "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc7078.JPG",
+     "shortName": "Peppered chub",
+     "sid": {
+      "id": 4243,
+      "val": "Population$Sid[4243]"
+     },
+     "speciesId": 532,
+     "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/532"
+    },
+    "ranges": [
+     {
+      "conditional": false,
+      "fieldOfficeSid": {
+       "id": 64411,
+       "val": "FwsOffice$Sid[64411]"
+      },
+      "optionalCondition": null,
+      "seasons": []
+     }
+    ],
+    "tessDocuments": []
+   },
+   "Population$Sid[131]": {
+    "conditional": false,
+    "conditions": [],
+    "crithabInFootprint": false,
+    "optionalFederalRegisterCrithabStatus": {
+     "date": "2009-05-19T00:00Z",
+     "displayType": "Final",
+     "type": "Final",
+     "url": "https://www.govinfo.gov/link/fr/74/23476?link-type=pdf",
+     "isFileLocal": false,
+     "sid": {
+      "id": 131,
+      "val": "Population$Sid[131]"
+     }
+    },
+    "population": {
+     "groupCode": "B",
+     "groupName": "Birds",
+     "listingStatusCode": "T",
+     "listingStatusName": "Threatened",
+     "optionalCommonName": "Piping Plover",
+     "optionalListingStatusDescription": "A species likely to become endangered within the foreseeable future throughout all or a significant portion of its range",
+     "optionalPopulationDescription": "[Atlantic Coast and Northern Great Plains populations] - Wherever found, except those areas where listed as endangered.",
+     "optionalScientificName": "Charadrius melodus",
+     "optionalSpeciesDescription": "Size: 18 cm (7.25 in) in length. Color: Breeding season: Pale brown above, lighter below; black band across forehead; bill orange with black tip; legs orange; white rump. Male: Complete or incomplete black band encircles the body at the breast. Female: Paler head band; incomplete breast band. Winter coloration: Bill black; all birds lack breast band and head band.",
+     "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc3770.jpg",
+     "shortName": "Piping Plover",
+     "sid": {
+      "id": 131,
+      "val": "Population$Sid[131]"
+     },
+     "speciesId": 6039,
+     "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/6039"
+    },
+    "ranges": [
+     {
+      "conditional": false,
+      "fieldOfficeSid": {
+       "id": 64411,
+       "val": "FwsOffice$Sid[64411]"
+      },
+      "optionalCondition": null,
+      "seasons": []
+     }
+    ],
+    "tessDocuments": []
+   },
+   "Population$Sid[67]": {
+    "conditional": false,
+    "conditions": [],
+    "crithabInFootprint": true,
+    "optionalFederalRegisterCrithabStatus": {
+     "date": "1978-05-15T00:00Z",
+     "displayType": "Final",
+     "type": "Final",
+     "url": "https://www.govinfo.gov/link/fr/43/20938?link-type=pdf",
+     "isFileLocal": false,
+     "sid": {
+      "id": 67,
+      "val": "Population$Sid[67]"
+     }
+    },
+    "population": {
+     "groupCode": "B",
+     "groupName": "Birds",
+     "listingStatusCode": "E",
+     "listingStatusName": "Endangered",
+     "optionalCommonName": "Whooping crane",
+     "optionalListingStatusDescription": "A species in danger of extinction throughout all or a significant portion of its range",
+     "optionalPopulationDescription": "Wherever found, except where listed as an experimental population",
+     "optionalScientificName": "Grus americana",
+     "optionalSpeciesDescription": "The whooping crane occurs only in North America and is North America\u0092s tallest bird, with males approaching 1.5 m (5 ft) when standing erect. The whooping crane adult plumage is snowy white except for black primaries, black or grayish alula (specialized feathers attached to the upper leading end of the wing), sparse black bristly feathers on the carmine crown and malar region (side of the head from the bill to the angle of the jaw), and a dark gray-black wedge-shaped patch on the nape.  The common name &#34;whooping crane&#34; probably originated from the loud, single-note vocalization given repeatedly by the birds when they are alarmed. Whooping cranes are a long-lived species; current estimates suggest a maximum longevity in the wild of at least 30 years.\n\nWhooping cranes currently exist in the wild at 3 locations and in captivity at 12 sites. The July 2010 total wild population was estimated at 383.  There is only one self-sustaining wild population, the Aransas-Wood Buffalo National Park population, which nests in Wood Buffalo National Park and adjacent areas in Canada, and winters in coastal marshes in Texas at Aransas.  In addition, there is a small captive-raised, non-migratory population in central Florida, and a small migratory population of individuals introduced beginning in 2001 that migrate between Wisconsin and Florida in an eastern migratory population. The last remaining wild bird in the reintroduced Rocky Mountain Population died in the spring of 2002. The captive population contained 152 birds in July, 2010, with annual production from the Calgary Zoo, International Crane Foundation, Patuxent Wildlife Research Center, Audubon Species Survival Center, and the San Antonio Zoo. The total population of wild and captive whooping cranes in July, 2010, was 535.\n",
+     "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc3703.jpg",
+     "shortName": "Whooping crane",
+     "sid": {
+      "id": 67,
+      "val": "Population$Sid[67]"
+     },
+     "speciesId": 758,
+     "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/758"
+    },
+    "ranges": [
+     {
+      "conditional": false,
+      "fieldOfficeSid": {
+       "id": 64411,
+       "val": "FwsOffice$Sid[64411]"
+      },
+      "optionalCondition": null,
+      "seasons": []
+     }
+    ],
+    "tessDocuments": []
+   }
+  },
+  "crithabs": [
+   {
+    "hasGeometry": true,
+    "optionalGeometry": null,
+    "populationSid": {
+     "id": 67,
+     "val": "Population$Sid[67]"
+    },
+    "speciesInFootprint": true,
+    "type": "Final"
+   }
+  ]
+ }
+}

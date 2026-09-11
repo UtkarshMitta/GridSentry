@@ -7,10 +7,14 @@ FEMA NFHL (flood), and USGS PAD-US (nearby protected areas). Distances and
 bearings are computed from returned geometry, so results genuinely vary by
 location — Ripley farmland and Midtown Manhattan no longer share a template.
 
-If every live service is unreachable, `ingest` produces a clearly-flagged
-*simulated* payload (provenance = "simulated") so the app still renders; the
-Red-Team Critic surfaces that provenance prominently rather than passing off
+If every live service is unreachable, `ingest_live` falls back to a
+clearly-flagged *simulated* payload (provenance = "simulated", every feature
+source labelled SIMULATED) so the app still renders; the report and the
+Red-Team Critic surface that provenance prominently rather than passing off
 synthetic features as real findings.
+
+Project acreage is a caller input. When omitted, a fixed default is used and
+flagged `acreage_assumed` — it is never derived from the coordinates.
 
 Grounding rules (see grounding.py): jurisdiction comes from real reverse
 geocoding; NWI polygons are unnamed in the source data, so we never invent
@@ -107,6 +111,7 @@ STATE_WETLAND_PROGRAMS: dict[str, tuple[str, str]] = {
     "MA": ("Bordering Vegetated Wetland (310 CMR 10.55)", "MassDEP / local conservation commission"),
     "PA": ("Exceptional Value wetland (25 Pa. Code Ch. 105)", "PA Department of Environmental Protection"),
 }
+SIMULATED_SOURCE = "SIMULATED placeholder — live service unreachable, not a real finding"
 DEFAULT_WETLAND_PROGRAM = (
     "State-regulated wetland (program unverified — confirm with state agency)",
     "State environmental agency (unverified)",
@@ -118,14 +123,16 @@ def _seed_for(lat: float, lon: float) -> int:
     return int(hashlib.sha256(key.encode()).hexdigest()[:12], 16)
 
 
-def site_acreage(lat: float, lon: float) -> float:
-    """The acreage `ingest` will assign for these coordinates.
+# Typical utility-scale solar footprint (~40-50 MWac). Used only when the
+# caller gives no acreage, and always labelled as assumed in the report.
+DEFAULT_ACREAGE = 300.0
 
-    Acreage is the first draw from the coordinate-seeded RNG, so the Land
-    Status Gate can know the footprint size before ingestion runs and the
-    numbers stay consistent across the pipeline.
-    """
-    return round(random.Random(_seed_for(lat, lon)).uniform(120, 480), 1)
+
+def resolve_acreage(site_input: SiteInput) -> tuple[float, bool]:
+    """(acreage, assumed) for the proposed footprint."""
+    if site_input.acreage:
+        return round(site_input.acreage, 1), False
+    return DEFAULT_ACREAGE, True
 
 
 def _dest(lat: float, lon: float, bearing_deg: float, dist_m: float) -> tuple[float, float]:
@@ -172,14 +179,15 @@ def _build_site(site_input: SiteInput, jurisdiction: Jurisdiction) -> Site:
         "wind": f"{locality} Wind Project",
         "transmission": f"{locality} Transmission Corridor",
     }
-    acreage = site_acreage(lat, lon)
-    half = math.sqrt(acreage * 4046.86) / 2
+    acreage, assumed = resolve_acreage(site_input)
+    half = geodata.half_width_m(acreage)
     return Site(
         lat=lat,
         lon=lon,
         project_type=site_input.project_type,
         name=site_input.name or project_names[site_input.project_type],
         acreage=acreage,
+        acreage_assumed=assumed,
         footprint=_rect(lat, lon, half),
         jurisdiction=jurisdiction,
     )
@@ -193,7 +201,8 @@ def _base_sources(jurisdiction: Jurisdiction) -> list[str]:
 async def ingest_live(site_input: SiteInput, jurisdiction: Jurisdiction) -> GISPayload:
     """Primary ingestion: build the site, then query real datasets for it."""
     site = _build_site(site_input, jurisdiction)
-    state_code = jurisdiction.state_code
+    # State-law flags only for a verified jurisdiction (see grounding.py).
+    state_code = jurisdiction.state_code if jurisdiction.verified else None
     data = await geodata.fetch_all(site.lat, site.lon, site.acreage, state_code)
 
     prov = DataProvenance(**data["provenance"])
@@ -242,10 +251,9 @@ def _simulated_payload(
     county = jurisdiction.county or "the surrounding county"
     locality = jurisdiction.locality or jurisdiction.county or "Proposed Site"
     state_code = jurisdiction.state_code
-    wetland_class, wetland_agency = STATE_WETLAND_PROGRAMS.get(
-        state_code or "", DEFAULT_WETLAND_PROGRAM
-    )
+    _, wetland_agency = STATE_WETLAND_PROGRAMS.get(state_code or "", DEFAULT_WETLAND_PROGRAM)
     site = site or _build_site(site_input, jurisdiction)
+    half_m = geodata.half_width_m(site.acreage)
 
     # --- Wetlands: headline feature ~183 m (200 yd) east, always state-relevant ---
     # Real NWI polygons are unnamed, so use honest descriptive names.
@@ -254,55 +262,62 @@ def _simulated_payload(
     head_dist = rng.uniform(175, 195)
     wlat, wlon = _dest(lat, lon, head_bearing, head_dist)
     cls, cls_name = NWI_CLASSES[0]
+    head_geom = _blob(rng, wlat, wlon, rng.uniform(140, 220))
+    # Synthetic features never carry a state-regulated flag: that would put
+    # real state-law citations on a fictional wetland.
     wetlands.append(
         Wetland(
-            id=f"NWI-{rng.randint(100000, 999999)}",
-            name=f"Unnamed emergent marsh complex ({county})",
+            id=f"SIM-NWI-{rng.randint(100000, 999999)}",
+            name=f"Simulated emergent marsh placeholder ({county})",
             classification=cls,
             wetland_type=cls_name,
             distance_m=round(head_dist, 1),
             bearing=_compass(head_bearing),
             area_acres=round(rng.uniform(14, 38), 1),
-            state_protected=True,
-            state_class=wetland_class,
-            geometry=_blob(rng, wlat, wlon, rng.uniform(140, 220)),
+            state_protected=False,
+            geometry=head_geom,
             name_verified=False,
+            crosses_footprint=geodata.footprint_overlaps(lat, lon, half_m, head_geom),
+            source=SIMULATED_SOURCE,
         )
     )
     for _ in range(rng.randint(1, 2)):
         b, d = rng.uniform(0, 360), rng.uniform(450, 1100)
         plat, plon = _dest(lat, lon, b, d)
         cls, cls_name = rng.choice(NWI_CLASSES[1:])
+        geom = _blob(rng, plat, plon, rng.uniform(60, 140))
         wetlands.append(
             Wetland(
-                id=f"NWI-{rng.randint(100000, 999999)}",
-                name=f"Unnamed {cls_name.split(' (')[0].lower()}",
+                id=f"SIM-NWI-{rng.randint(100000, 999999)}",
+                name=f"Simulated {cls_name.split(' (')[0].lower()} placeholder",
                 classification=cls,
                 wetland_type=cls_name,
                 distance_m=round(d, 1),
                 bearing=_compass(b),
                 area_acres=round(rng.uniform(2, 16), 1),
                 state_protected=False,
-                geometry=_blob(rng, plat, plon, rng.uniform(60, 140)),
+                geometry=geom,
                 name_verified=False,
+                crosses_footprint=geodata.footprint_overlaps(lat, lon, half_m, geom),
+                source=SIMULATED_SOURCE,
             )
         )
 
-    # --- Critical habitat: one listed species unit within ~1.5 km ---
+    # --- Species: one region-plausible listed species (species-list screen only) ---
     pool = SPECIES_BY_STATE.get(state_code or "", SPECIES_GENERIC)
     sci, common, status = pool[rng.randrange(len(pool))]
-    hb, hd = rng.uniform(0, 360), rng.uniform(700, 1500)
-    hlat, hlon = _dest(lat, lon, hb, hd)
     habitats = [
         Habitat(
-            id=f"ECOS-{rng.randint(10000, 99999)}",
+            id=f"SIM-IPAC-{rng.randint(10000, 99999)}",
             species=sci,
             common_name=common,
             status=status,
-            unit_name=f"Unit {rng.choice('ABCDE')}{rng.randint(1, 9)} — {county} watershed",
-            distance_m=round(hd, 1),
-            bearing=_compass(hb),
-            geometry=_blob(rng, hlat, hlon, rng.uniform(320, 520), points=12),
+            unit_name="Simulated species-list placeholder (IPaC unreachable)",
+            distance_m=None,
+            bearing=None,
+            geometry=None,
+            basis="ipac_species_list",
+            source=SIMULATED_SOURCE,
         )
     ]
 
@@ -311,14 +326,15 @@ def _simulated_payload(
     plat, plon = _dest(lat, lon, pb, pd)
     protected = [
         ProtectedLand(
-            id=f"PADUS-{rng.randint(100000, 999999)}",
-            name=f"Conservation land near {locality} (PAD-US record)",
+            id=f"SIM-PADUS-{rng.randint(100000, 999999)}",
+            name=f"Simulated conservation-land placeholder near {locality}",
             designation="State conservation / open space",
             manager=wetland_agency,
             distance_m=round(pd, 1),
             bearing=_compass(pb),
             geometry=_blob(rng, plat, plon, rng.uniform(600, 900), points=12),
             name_verified=False,
+            source=SIMULATED_SOURCE,
         )
     ]
 
@@ -327,13 +343,17 @@ def _simulated_payload(
     if rng.random() < 0.6:
         fb, fd = rng.uniform(0, 360), rng.uniform(350, 800)
         flat, flon = _dest(lat, lon, fb, fd)
+        fgeom = _blob(rng, flat, flon, rng.uniform(200, 350))
         flood_zones.append(
             FloodZone(
-                id=f"NFHL-{rng.randint(10000, 99999)}",
+                id=f"SIM-NFHL-{rng.randint(10000, 99999)}",
                 zone="AE",
                 description="1% annual chance flood hazard (base flood elevation determined)",
                 distance_m=round(fd, 1),
-                geometry=_blob(rng, flat, flon, rng.uniform(200, 350)),
+                geometry=fgeom,
+                sfha=True,
+                overlaps_footprint=geodata.footprint_overlaps(lat, lon, half_m, fgeom),
+                source=SIMULATED_SOURCE,
             )
         )
 
@@ -356,7 +376,18 @@ def _simulated_payload(
     )
 
 
-def ingest(site_input: SiteInput, jurisdiction: Jurisdiction) -> GISPayload:
-    """Synchronous simulated ingestion (used by the infeasible short-circuit
-    path, which only needs the site geometry — features are dropped there)."""
-    return _simulated_payload(site_input, jurisdiction)
+def site_only(site_input: SiteInput, jurisdiction: Jurisdiction) -> GISPayload:
+    """Site geometry with no environmental layers — for runs the Land Status
+    Gate halts. Layers are 'not_assessed' (not 'simulated': nothing was
+    fabricated, the assessment was deliberately skipped)."""
+    return GISPayload(
+        site=_build_site(site_input, jurisdiction),
+        wetlands=[],
+        habitats=[],
+        protected_lands=[],
+        flood_zones=[],
+        sources=_base_sources(jurisdiction),
+        provenance=DataProvenance(
+            wetlands="not_assessed", species="not_assessed", flood="not_assessed", protected="not_assessed"
+        ),
+    )

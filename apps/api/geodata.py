@@ -10,8 +10,9 @@ queried for the *actual* project coordinates:
 - Protected  → USGS PAD-US (nearby managed/protected areas)
 
 Distances and bearings are computed from the returned geometry against the
-site centroid — there is no hard-coded "~190 m east" template. When a layer's
-live service is unreachable, that layer is reported as unavailable
+site centroid, and footprint overlap is an exact polygon-vs-square test —
+there is no hard-coded "~190 m east" template. When a layer's live service is
+unreachable (or exceeds its deadline), that layer is reported as unavailable
 (provenance = "unavailable") rather than silently backfilled with fiction.
 """
 from __future__ import annotations
@@ -19,13 +20,20 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from typing import Any, Optional
+from typing import Any, Awaitable, Optional, TypeVar
 
 import httpx
 
 from models import FloodZone, Habitat, ProtectedLand, Wetland
 
 TIMEOUT = 20.0
+# httpx timeouts apply per network operation, so a server that trickles bytes
+# can hold a request open indefinitely. Each layer also gets a hard deadline.
+LAYER_DEADLINE = 30.0
+# Server-side generalization (~5 m) keeps full-resolution floodplain/wetland
+# polygons from ballooning a single run to 10+ MB. Well inside NWI's own
+# positional accuracy (tens of metres).
+GEOMETRY_OFFSET_DEG = 0.00005
 COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
 
 NWI_URL = (
@@ -41,19 +49,47 @@ PADUS_URL = (
 
 EARTH_R = 6_371_000.0
 
-# ESA listing-status codes IPaC returns, mapped to human labels + whether the
-# code represents a currently-listed (vs proposed/candidate) species.
+# ESA listing-status codes IPaC returns → (human label, subject to ESA §7
+# consultation as a listed species). Nonessential experimental populations are
+# treated as *proposed* for §7 purposes (ESA §10(j)(2)(C)), and
+# similarity-of-appearance listings carry no §7 obligation.
 LISTING_STATUS = {
     "E": ("Endangered", True),
     "T": ("Threatened", True),
-    "EXPN": ("Experimental Population, Non-Essential", True),
     "EXPE": ("Experimental Population, Essential", True),
-    "SAT": ("Threatened (Similarity of Appearance)", True),
+    "EXPN": ("Experimental Population, Non-Essential", False),
+    "SAT": ("Threatened (Similarity of Appearance)", False),
     "PE": ("Proposed Endangered", False),
     "PT": ("Proposed Threatened", False),
     "C": ("Candidate", False),
     "RT": ("Resolved Taxon", False),
 }
+
+T = TypeVar("T")
+
+
+async def _with_deadline(coro: Awaitable[Optional[T]]) -> Optional[T]:
+    try:
+        return await asyncio.wait_for(coro, LAYER_DEADLINE)
+    except Exception:  # includes asyncio.TimeoutError
+        return None
+
+
+def _arcgis_point_params(lat: float, lon: float, distance_m: float, out_fields: str) -> dict[str, Any]:
+    return {
+        "geometry": json.dumps({"x": lon, "y": lat, "spatialReference": {"wkid": 4326}}),
+        "geometryType": "esriGeometryPoint",
+        "inSR": "4326",
+        "distance": distance_m,
+        "units": "esriSRUnit_Meter",
+        "spatialRel": "esriSpatialRelIntersects",
+        "outFields": out_fields,
+        "returnGeometry": "true",
+        "outSR": "4326",
+        "maxAllowableOffset": GEOMETRY_OFFSET_DEG,
+        "geometryPrecision": 6,
+        "f": "json",
+    }
 
 
 # --- geometry helpers -------------------------------------------------------
@@ -62,18 +98,12 @@ def _compass(bearing_deg: float) -> str:
     return COMPASS[int(((bearing_deg % 360) + 22.5) // 45) % 8]
 
 
-def _bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """Initial bearing from point 1 to point 2, in degrees."""
-    dlon = math.radians(lon2 - lon1)
-    y = math.sin(dlon) * math.cos(math.radians(lat2))
-    x = math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) - math.sin(
-        math.radians(lat1)
-    ) * math.cos(math.radians(lat2)) * math.cos(dlon)
-    return (math.degrees(math.atan2(y, x)) + 360) % 360
+def _m_per_deg_lon(lat: float) -> float:
+    return 111_320 * math.cos(math.radians(lat))
 
 
 def _rings(geometry: dict[str, Any]) -> list[list[list[float]]]:
-    """Normalize esriGeometry / GeoJSON polygon into a list of [lon,lat] rings."""
+    """Normalize esriGeometry / GeoJSON polygon into a flat list of [lon,lat] rings."""
     if not geometry:
         return []
     if "rings" in geometry:
@@ -87,81 +117,163 @@ def _rings(geometry: dict[str, Any]) -> list[list[list[float]]]:
     return []
 
 
-def _point_in_ring(lon: float, lat: float, ring: list[list[float]]) -> bool:
+def _local_rings(lat: float, lon: float, geometry: dict[str, Any]) -> list[list[tuple[float, float]]]:
+    """Rings projected into a local equirectangular metre frame centred on the site."""
+    kx, ky = _m_per_deg_lon(lat), 111_320.0
+    return [[((p[0] - lon) * kx, (p[1] - lat) * ky) for p in ring] for ring in _rings(geometry)]
+
+
+def _point_in_ring(x: float, y: float, ring: list[tuple[float, float]]) -> bool:
     inside = False
-    n = len(ring)
-    j = n - 1
-    for i in range(n):
-        xi, yi = ring[i][0], ring[i][1]
-        xj, yj = ring[j][0], ring[j][1]
-        if ((yi > lat) != (yj > lat)) and (
-            lon < (xj - xi) * (lat - yi) / ((yj - yi) or 1e-12) + xi
-        ):
+    j = len(ring) - 1
+    for i in range(len(ring)):
+        xi, yi = ring[i]
+        xj, yj = ring[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi):
             inside = not inside
         j = i
     return inside
 
 
-def _seg_dist_m(lat: float, lon: float, a: list[float], b: list[float]) -> float:
-    """Distance (m) from point to segment a-b, in a local equirectangular frame."""
-    mlat = math.radians(lat)
-    kx = 111_320 * math.cos(mlat)
-    ky = 111_320
-    px, py = 0.0, 0.0
-    ax, ay = (a[0] - lon) * kx, (a[1] - lat) * ky
-    bx, by = (b[0] - lon) * kx, (b[1] - lat) * ky
-    dx, dy = bx - ax, by - ay
+def _origin_in_polygon(rings: list[list[tuple[float, float]]]) -> bool:
+    """Even-odd rule across all rings, so a point inside a hole is outside."""
+    return sum(_point_in_ring(0.0, 0.0, r) for r in rings) % 2 == 1
+
+
+def _closest_on_segment(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float]:
+    dx, dy = b[0] - a[0], b[1] - a[1]
     seg2 = dx * dx + dy * dy
     if seg2 == 0:
-        return math.hypot(ax, ay)
-    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / seg2))
-    cx, cy = ax + t * dx, ay + t * dy
-    return math.hypot(px - cx, py - cy)
+        return a
+    t = max(0.0, min(1.0, -(a[0] * dx + a[1] * dy) / seg2))
+    return a[0] + t * dx, a[1] + t * dy
+
+
+def _nearest(lat: float, lon: float, geometry: dict[str, Any]) -> tuple[float, Optional[tuple[float, float]]]:
+    """(distance m, nearest boundary point in local metres); (0, None) if inside."""
+    rings = _local_rings(lat, lon, geometry)
+    if not rings:
+        return float("inf"), None
+    if _origin_in_polygon(rings):
+        return 0.0, None
+    best, best_pt = float("inf"), None
+    for ring in rings:
+        for i in range(len(ring) - 1):
+            cx, cy = _closest_on_segment(ring[i], ring[i + 1])
+            d = math.hypot(cx, cy)
+            if d < best:
+                best, best_pt = d, (cx, cy)
+    return best, best_pt
 
 
 def nearest_distance_m(lat: float, lon: float, geometry: dict[str, Any]) -> float:
-    """0 if the point is inside the polygon, else nearest-edge distance in metres."""
-    rings = _rings(geometry)
-    if not rings:
-        return float("inf")
-    for ring in rings:
-        if _point_in_ring(lon, lat, ring):
-            return 0.0
-    best = float("inf")
-    for ring in rings:
-        for i in range(len(ring) - 1):
-            best = min(best, _seg_dist_m(lat, lon, ring[i], ring[i + 1]))
-    return best
+    """0 if the site centroid is inside the polygon, else nearest-edge distance in metres."""
+    return _nearest(lat, lon, geometry)[0]
 
 
-def _feature_bearing(lat: float, lon: float, geometry: dict[str, Any]) -> str:
-    """Compass bearing from site to the polygon's centroid."""
-    rings = _rings(geometry)
+def _segment_hits_square(a: tuple[float, float], b: tuple[float, float], h: float) -> bool:
+    """Liang–Barsky clip of segment a-b against the square [-h, h]²."""
+    t0, t1 = 0.0, 1.0
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    for p, q in ((-dx, a[0] + h), (dx, h - a[0]), (-dy, a[1] + h), (dy, h - a[1])):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        r = q / p
+        if p < 0:
+            t0 = max(t0, r)
+        else:
+            t1 = min(t1, r)
+        if t0 > t1:
+            return False
+    return True
+
+
+def footprint_overlaps(lat: float, lon: float, half_m: float, geometry: dict[str, Any]) -> bool:
+    """True if the polygon intersects the square project footprint (half-side half_m)."""
+    rings = _local_rings(lat, lon, geometry)
     if not rings:
+        return False
+    if _origin_in_polygon(rings):  # footprint centre inside (covers polygon ⊇ footprint)
+        return True
+    return any(
+        _segment_hits_square(ring[i], ring[i + 1], half_m)
+        for ring in rings
+        for i in range(len(ring) - 1)
+    )
+
+
+def _bearing_to(lat: float, lon: float, geometry: dict[str, Any], nearest_pt: Optional[tuple[float, float]]) -> str:
+    """Compass bearing from site to the nearest boundary point (or polygon centroid if inside)."""
+    if nearest_pt is None:
+        rings = _local_rings(lat, lon, geometry)
+        if not rings:
+            return "—"
+        ring = rings[0]
+        nearest_pt = (sum(p[0] for p in ring) / len(ring), sum(p[1] for p in ring) / len(ring))
+    x, y = nearest_pt
+    if abs(x) < 1e-6 and abs(y) < 1e-6:
         return "—"
-    ring = rings[0]
-    clon = sum(p[0] for p in ring) / len(ring)
-    clat = sum(p[1] for p in ring) / len(ring)
-    return _compass(_bearing(lat, lon, clat, clon))
+    return _compass(math.degrees(math.atan2(x, y)))
+
+
+def _signed_area(ring: list[list[float]]) -> float:
+    return sum(
+        ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1] for i in range(len(ring) - 1)
+    ) / 2
 
 
 def _to_geojson(geometry: dict[str, Any]) -> dict[str, Any]:
-    """Convert an esri polygon to a GeoJSON Polygon for the frontend map."""
-    rings = _rings(geometry)
-    return {"type": "Polygon", "coordinates": rings}
+    """Convert an esri polygon to GeoJSON for the frontend map.
+
+    Esri polygons list every ring flat: clockwise rings are exteriors,
+    counter-clockwise rings are holes. A multi-part feature must become a
+    MultiPolygon, or Leaflet renders the second part as a hole in the first.
+    """
+    if not geometry:
+        return {"type": "Polygon", "coordinates": []}
+    if "rings" not in geometry:
+        return geometry
+    outers: list[list[list[list[float]]]] = []
+    holes: list[list[list[float]]] = []
+    for ring in geometry["rings"]:
+        (outers.append([ring]) if _signed_area(ring) < 0 else holes.append(ring))
+    if not outers:
+        return {"type": "Polygon", "coordinates": geometry["rings"]}
+    for hole in holes:
+        hx, hy = hole[0]
+        owner = next(
+            (poly for poly in outers if _point_in_ring(hx, hy, [(p[0], p[1]) for p in poly[0]])),
+            outers[0],
+        )
+        owner.append(hole)
+    if len(outers) == 1:
+        return {"type": "Polygon", "coordinates": outers[0]}
+    return {"type": "MultiPolygon", "coordinates": outers}
 
 
 # --- NWI wetlands -----------------------------------------------------------
 
-# NWI ATTRIBUTE code prefix → NWI system (for a plain-language type when the
-# WETLAND_TYPE field is terse). Codes follow Cowardin classification.
-def _wetland_state_class(state_code: Optional[str], acres: float) -> tuple[bool, Optional[str]]:
-    """Best-effort *conditional* state-jurisdiction flag from real acreage.
+# Palustrine vegetated Cowardin classes (emergent, forested, scrub-shrub,
+# aquatic bed). State freshwater-wetland statutes regulate these — not
+# riverine channels (R*), lakes (L*), or tidal/estuarine systems (E*, M*),
+# which fall under separate stream, lake, or tidal-wetland regimes.
+FRESHWATER_VEGETATED = ("PEM", "PFO", "PSS", "PAB")
 
-    We do NOT assert a state class we can't verify. We only note where the
-    real mapped size crosses a state's statutory size threshold, which is a
-    defensible, data-grounded signal (final status still needs delineation).
+
+def _wetland_state_class(
+    state_code: Optional[str], acres: float, classification: str = ""
+) -> tuple[bool, Optional[str]]:
+    """Best-effort *conditional* state-jurisdiction flag from real attributes.
+
+    We do NOT assert a state class we can't verify. We only note where a
+    mapped freshwater vegetated wetland meets a state's statutory screen,
+    which is a defensible, data-grounded signal (final status still needs
+    delineation). `state_code` must be a *verified* jurisdiction.
     """
+    if not (classification or "").upper().startswith(FRESHWATER_VEGETATED):
+        return False, None
     if state_code == "NY" and acres >= 12.4:
         return True, "Likely NYS-regulated (≥12.4 ac, ECL Art. 24 threshold) — confirm by delineation"
     if state_code == "NJ":
@@ -172,19 +284,9 @@ def _wetland_state_class(state_code: Optional[str], acres: float) -> tuple[bool,
 async def _fetch_wetlands(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float, state_code: Optional[str]
 ) -> Optional[list[Wetland]]:
-    geom = json.dumps({"x": lon, "y": lat, "spatialReference": {"wkid": 4326}})
-    params = {
-        "geometry": geom,
-        "geometryType": "esriGeometryPoint",
-        "inSR": "4326",
-        "distance": 1600,
-        "units": "esriSRUnit_Meter",
-        "spatialRel": "esriSpatialRelIntersects",
-        "outFields": "Wetlands.ATTRIBUTE,Wetlands.WETLAND_TYPE,Wetlands.ACRES",
-        "returnGeometry": "true",
-        "outSR": "4326",
-        "f": "json",
-    }
+    params = _arcgis_point_params(
+        lat, lon, 1600, "Wetlands.ATTRIBUTE,Wetlands.WETLAND_TYPE,Wetlands.ACRES"
+    )
     try:
         resp = await client.get(NWI_URL, params=params)
         resp.raise_for_status()
@@ -199,14 +301,13 @@ async def _fetch_wetlands(
     for i, f in enumerate(feats):
         a = f.get("attributes", {})
         geometry = f.get("geometry", {})
-        dist = nearest_distance_m(lat, lon, geometry)
+        dist, nearest_pt = _nearest(lat, lon, geometry)
         if not math.isfinite(dist):
             continue
         acres = float(a.get("Wetlands.ACRES") or 0.0)
         code = (a.get("Wetlands.ATTRIBUTE") or "").strip()
         wtype = (a.get("Wetlands.WETLAND_TYPE") or "Wetland").strip()
-        protected, state_class = _wetland_state_class(state_code, acres)
-        crosses = dist <= half_m
+        protected, state_class = _wetland_state_class(state_code, acres, code)
         scored.append(
             (
                 dist,
@@ -216,27 +317,35 @@ async def _fetch_wetlands(
                     classification=code or "n/a",
                     wetland_type=wtype,
                     distance_m=round(dist, 1),
-                    bearing=_feature_bearing(lat, lon, geometry),
+                    bearing=_bearing_to(lat, lon, geometry, nearest_pt),
                     area_acres=round(acres, 2),
                     state_protected=protected,
                     state_class=state_class,
                     geometry=_to_geojson(geometry),
                     name_verified=False,
-                    crosses_footprint=crosses,
-                    data_source="USFWS National Wetlands Inventory (live query)",
+                    crosses_footprint=footprint_overlaps(lat, lon, half_m, geometry),
+                    source="USFWS National Wetlands Inventory (live query)",
                 ),
             )
         )
-    scored.sort(key=lambda t: t[0])
+    # Footprint conflicts first, then by distance.
+    scored.sort(key=lambda t: (not t[1].crosses_footprint, t[0]))
     return [w for _, w in scored[:8]]
 
 
 # --- IPaC species + critical habitat ---------------------------------------
 
+def _sid_key(sid: Any) -> Optional[str]:
+    """IPaC population ids come as {"id": 176, "val": "Population$Sid[176]"} or a bare string."""
+    if isinstance(sid, dict):
+        sid = sid.get("val") or (f"Population$Sid[{sid['id']}]" if "id" in sid else None)
+    return str(sid) if sid else None
+
+
 async def _fetch_species(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float
 ) -> Optional[list[Habitat]]:
-    # A small footprint polygon around the site (IPaC wants an area).
+    # The project footprint square (IPaC wants an area).
     d = max(half_m, 400) / 111_320
     dlon = d / max(math.cos(math.radians(lat)), 0.1)
     footprint = {
@@ -262,65 +371,82 @@ async def _fetch_species(
 
     res = data.get("resources", {})
     pops = res.get("allReferencedPopulationsBySid", {})
-    crithab_sids = set()
+    in_list = res.get("populationsBySid") or {}
+    # IPaC's crithabs are the critical-habitat units intersecting the footprint.
+    crithab_type: dict[str, str] = {}
     for ch in res.get("crithabs", []) or []:
-        sid = ch.get("sid") or ch.get("populationSid")
-        if sid:
-            crithab_sids.add(str(sid))
+        key = _sid_key(ch.get("populationSid") or ch.get("sid"))
+        if key:
+            prev = crithab_type.get(key)
+            crithab_type[key] = "Final" if "Final" in (prev, ch.get("type")) else (ch.get("type") or "Final")
+    for key, entry in in_list.items():
+        if isinstance(entry, dict) and entry.get("crithabInFootprint") and key not in crithab_type:
+            crithab_type[key] = "Final"
 
     habitats: list[Habitat] = []
     for sid, p in pops.items():
-        code = p.get("listingStatusCode")
-        info = LISTING_STATUS.get(code)
+        # Only species on the official list for this footprint (or with habitat in it).
+        if in_list and sid not in in_list and sid not in crithab_type:
+            continue
+        info = LISTING_STATUS.get(p.get("listingStatusCode"))
         if not info:
             continue
         label, is_listed = info
-        # Only surface currently-listed species (proposed/candidate noted separately below).
-        common = p.get("optionalCommonName") or "Listed species"
-        sci = p.get("optionalScientificName") or ""
-        has_ch = str(sid).split("[")[-1].rstrip("]") in crithab_sids
+        ch = crithab_type.get(sid)
+        basis = (
+            "critical_habitat" if ch == "Final"
+            else "proposed_critical_habitat" if ch
+            else "ipac_species_list"
+        )
         habitats.append(
             Habitat(
-                id=f"IPAC-{str(sid).replace('$','-').replace('[','-').replace(']','')}",
-                species=sci,
-                common_name=common,
+                id=f"IPAC-{sid.replace('$', '-').replace('[', '-').replace(']', '')}",
+                species=p.get("optionalScientificName") or "",
+                common_name=p.get("optionalCommonName") or "Listed species",
                 status=label,
-                unit_name=(
-                    "Designated critical habitat overlaps the location"
-                    if has_ch
-                    else "IPaC official species list — may be present in the action area"
-                ),
+                unit_name={
+                    "critical_habitat": "Designated critical habitat overlaps the project footprint",
+                    "proposed_critical_habitat": "Proposed critical habitat overlaps the project footprint",
+                }.get(basis, "IPaC official species list — may be present in the action area"),
                 distance_m=None,
                 bearing=None,
                 geometry=None,
-                basis="critical_habitat" if has_ch else "ipac_species_list",
+                basis=basis,
                 currently_listed=is_listed,
                 source="USFWS IPaC (live query)",
             )
         )
-    # Listed species first, then proposed/candidate; stable within groups.
-    habitats.sort(key=lambda h: (not h.currently_listed, h.common_name))
+    # Critical habitat first, then listed, then proposed/candidate.
+    habitats.sort(key=lambda h: (h.basis == "ipac_species_list", not h.currently_listed, h.common_name))
     return habitats
 
 
 # --- FEMA flood -------------------------------------------------------------
 
+FLOOD_DESCRIPTIONS = {
+    "A": "1% annual chance flood hazard (no base flood elevation)",
+    "AE": "1% annual chance flood hazard (base flood elevation determined)",
+    "AH": "1% annual chance shallow flooding (ponding)",
+    "AO": "1% annual chance shallow flooding (sheet flow)",
+    "AR": "1% annual chance flood hazard (levee being restored)",
+    "A99": "1% annual chance flood hazard (federal levee under construction)",
+    "V": "Coastal high hazard (wave action)",
+    "VE": "Coastal high hazard (wave action, base flood elevation determined)",
+    "D": "Area of undetermined flood hazard (not studied)",
+}
+# Zones that are not flood-hazard constraints at all.
+_NON_HAZARD_ZONES = {"OPEN WATER", "AREA NOT INCLUDED"}
+
+
+def _is_sfha(zone: str) -> bool:
+    """Special Flood Hazard Area = the 1%-annual-chance (base) floodplain."""
+    return zone[:1] in ("A", "V") and zone not in _NON_HAZARD_ZONES
+
+
 async def _fetch_flood(
-    client: httpx.AsyncClient, lat: float, lon: float
+    client: httpx.AsyncClient, lat: float, lon: float, half_m: float
 ) -> Optional[list[FloodZone]]:
-    geom = json.dumps({"x": lon, "y": lat, "spatialReference": {"wkid": 4326}})
-    params = {
-        "geometry": geom,
-        "geometryType": "esriGeometryPoint",
-        "inSR": "4326",
-        "distance": 1200,
-        "units": "esriSRUnit_Meter",
-        "spatialRel": "esriSpatialRelIntersects",
-        "outFields": "FLD_ZONE,ZONE_SUBTY",
-        "returnGeometry": "true",
-        "outSR": "4326",
-        "f": "json",
-    }
+    params = _arcgis_point_params(lat, lon, 1200, "FLD_ZONE,ZONE_SUBTY")
     try:
         resp = await client.get(FEMA_URL, params=params)
         resp.raise_for_status()
@@ -331,59 +457,86 @@ async def _fetch_flood(
     except Exception:
         return None
 
-    zones: list[tuple[float, FloodZone]] = []
+    zones: list[FloodZone] = []
     for i, f in enumerate(feats):
         a = f.get("attributes", {})
-        zone = (a.get("FLD_ZONE") or "").strip()
+        zone = (a.get("FLD_ZONE") or "").strip().upper()
         subty = (a.get("ZONE_SUBTY") or "").strip()
-        # Skip "AREA OF MINIMAL FLOOD HAZARD" (Zone X unshaded) — not a constraint.
-        if not zone or (zone == "X" and "MINIMAL" in subty.upper()):
+        # Unshaded Zone X ("minimal hazard") and non-hazard polygons aren't constraints.
+        if not zone or zone in _NON_HAZARD_ZONES or (zone == "X" and "MINIMAL" in subty.upper()):
             continue
         geometry = f.get("geometry", {})
         dist = nearest_distance_m(lat, lon, geometry)
-        desc = subty or {
-            "AE": "1% annual chance flood hazard (base flood elevation determined)",
-            "A": "1% annual chance flood hazard",
-            "AO": "Shallow flooding (sheet flow)",
-            "VE": "Coastal high hazard (wave action)",
-            "X": "0.2% annual chance / reduced-risk area",
-        }.get(zone, f"FEMA flood zone {zone}")
+        if zone == "X":
+            desc = (
+                "Reduced flood risk due to levee" if "LEVEE" in subty.upper()
+                else "0.2% annual chance flood hazard (moderate risk, outside the base floodplain)"
+            )
+        else:
+            desc = FLOOD_DESCRIPTIONS.get(zone, subty or f"FEMA flood zone {zone}")
         zones.append(
-            (
-                dist,
-                FloodZone(
-                    id=f"NFHL-{zone}-{i}",
-                    zone=zone,
-                    description=desc,
-                    distance_m=round(dist, 1),
-                    geometry=_to_geojson(geometry),
-                    source="FEMA National Flood Hazard Layer (live query)",
-                ),
+            FloodZone(
+                id=f"NFHL-{zone}-{i}",
+                zone=zone,
+                description=desc,
+                distance_m=round(dist, 1),
+                geometry=_to_geojson(geometry),
+                sfha=_is_sfha(zone),
+                overlaps_footprint=footprint_overlaps(lat, lon, half_m, geometry),
+                source="FEMA National Flood Hazard Layer (live query)",
             )
         )
-    zones.sort(key=lambda t: t[0])
-    return [z for _, z in zones[:3]]
+    # Base-floodplain zones first, then nearest.
+    zones.sort(key=lambda z: (not z.sfha, not z.overlaps_footprint, z.distance_m))
+    return zones[:4]
 
 
 # --- PAD-US nearby protected areas -----------------------------------------
 
+# PAD-US "Mang_Name" (manager name) domain codes.
+PADUS_MANAGERS = {
+    "BLM": "Bureau of Land Management", "BOEM": "Bureau of Ocean Energy Management",
+    "BOR": "Bureau of Reclamation", "DOD": "U.S. Department of Defense", "DOE": "U.S. Department of Energy",
+    "FWS": "U.S. Fish and Wildlife Service", "NOAA": "National Oceanic and Atmospheric Administration",
+    "NPS": "National Park Service", "NRCS": "Natural Resources Conservation Service",
+    "USACE": "U.S. Army Corps of Engineers", "USFS": "U.S. Forest Service", "TVA": "Tennessee Valley Authority",
+    "OTHF": "Other federal agency", "BIA": "Bureau of Indian Affairs", "TRIB": "Tribal government",
+    "SDC": "State conservation department", "SDNR": "State natural resources department",
+    "SDOL": "State land department", "SFW": "State fish & wildlife agency", "SLB": "State land board",
+    "SPR": "State park & recreation agency", "OTHS": "State agency (other)", "CITY": "City government",
+    "CNTY": "County government", "REG": "Regional agency / special district", "RWD": "Regional water district",
+    "JNT": "Joint management", "UNKL": "Local government", "NGO": "Non-governmental organization",
+    "PVT": "Private", "UNK": "Unknown manager",
+}
+# PAD-US "Mang_Type" fallback when the manager code is unfamiliar.
+PADUS_MANAGER_TYPES = {
+    "FED": "Federal agency", "STAT": "State agency", "LOC": "Local government", "DIST": "Special district",
+    "TRIB": "Tribal government", "JNT": "Joint management", "NGO": "Non-governmental organization",
+    "PVT": "Private", "TERR": "Territorial government", "UNK": "Unknown manager",
+}
+# PAD-US "Des_Tp" (designation type) codes — used when Loc_Ds is blank.
+PADUS_DESIGNATIONS = {
+    "ACEC": "Area of Critical Environmental Concern", "AGRE": "Agricultural easement",
+    "CONE": "Conservation easement", "FOTH": "Federal land (other)", "HCA": "Historic or cultural area",
+    "IRA": "Inventoried Roadless Area", "LCA": "Local conservation area", "LHCA": "Local historic/cultural area",
+    "LOTH": "Local land (other)", "LP": "Local park", "LREC": "Local recreation area",
+    "LRMA": "Local resource management area", "MIL": "Military land", "MPA": "Marine protected area",
+    "NCA": "National Conservation Area", "NF": "National Forest", "NG": "National Grassland",
+    "NLS": "National Lakeshore or Seashore", "NM": "National Monument", "NP": "National Park",
+    "NRA": "National Recreation Area", "NT": "National Scenic or Historic Trail", "NWR": "National Wildlife Refuge",
+    "OCS": "Outer Continental Shelf lease area", "PCON": "Private conservation land",
+    "PUB": "Public land (multiple use)", "RNA": "Research Natural Area", "SCA": "State conservation area",
+    "SHCA": "State historic/cultural area", "SOTH": "State land (other)", "SP": "State Park",
+    "SREC": "State recreation area", "SRMA": "State resource management area", "SW": "State wilderness",
+    "TRIBL": "Tribal land", "WA": "Wilderness Area", "WSA": "Wilderness Study Area", "WSR": "Wild & Scenic River",
+}
+
+
 async def _fetch_protected(
-    client: httpx.AsyncClient, lat: float, lon: float
+    client: httpx.AsyncClient, lat: float, lon: float, half_m: float
 ) -> Optional[list[ProtectedLand]]:
-    geom = json.dumps({"x": lon, "y": lat, "spatialReference": {"wkid": 4326}})
-    params = {
-        "geometry": geom,
-        "geometryType": "esriGeometryPoint",
-        "inSR": "4326",
-        "distance": 5000,
-        "units": "esriSRUnit_Meter",
-        "spatialRel": "esriSpatialRelIntersects",
-        "outFields": "Unit_Nm,Des_Tp,Loc_Ds,Mang_Name,Mang_Type",
-        "returnGeometry": "true",
-        "outSR": "4326",
-        "f": "json",
-        "resultRecordCount": 12,
-    }
+    params = _arcgis_point_params(lat, lon, 5000, "Unit_Nm,Des_Tp,Loc_Ds,Mang_Name,Mang_Type,GAP_Sts")
+    params["resultRecordCount"] = 25
     try:
         resp = await client.get(PADUS_URL, params=params)
         resp.raise_for_status()
@@ -394,45 +547,50 @@ async def _fetch_protected(
     except Exception:
         return None
 
-    manager_names = {
-        "NPS": "National Park Service", "FWS": "U.S. Fish and Wildlife Service",
-        "USFS": "U.S. Forest Service", "BLM": "Bureau of Land Management",
-        "STAT": "State agency", "LOC": "Local government", "PVT": "Private",
-        "NGO": "Non-governmental organization", "JNT": "Joint management",
-    }
-    seen: set[str] = set()
-    out: list[tuple[float, ProtectedLand]] = []
+    # PAD-US stacks several records per place (fee, easement, designation);
+    # keep one per unit name, preferring the most protective GAP status.
+    best: dict[str, ProtectedLand] = {}
     for i, f in enumerate(feats):
         a = f.get("attributes", {})
         name = (a.get("Unit_Nm") or "").strip()
-        if not name or name in seen:
+        if not name:
             continue
-        seen.add(name)
         geometry = f.get("geometry", {})
-        dist = nearest_distance_m(lat, lon, geometry)
-        desig = (a.get("Loc_Ds") or a.get("Des_Tp") or "Protected/managed area").strip()
-        mang = manager_names.get((a.get("Mang_Name") or "").strip(), (a.get("Mang_Name") or "land manager").strip())
-        out.append(
-            (
-                dist,
-                ProtectedLand(
-                    id=f"PADUS-{i}",
-                    name=name,
-                    designation=desig,
-                    manager=mang,
-                    distance_m=round(dist, 1),
-                    bearing=_feature_bearing(lat, lon, geometry),
-                    geometry=_to_geojson(geometry),
-                    name_verified=True,
-                    source="USGS PAD-US (live query)",
-                ),
-            )
+        dist, nearest_pt = _nearest(lat, lon, geometry)
+        des_tp = (a.get("Des_Tp") or "").strip()
+        loc_ds = (a.get("Loc_Ds") or "").strip()
+        desig = loc_ds if loc_ds and loc_ds.upper() != des_tp.upper() else PADUS_DESIGNATIONS.get(des_tp, des_tp or "Protected/managed area")
+        mang_code = (a.get("Mang_Name") or "").strip()
+        mang = PADUS_MANAGERS.get(mang_code) or PADUS_MANAGER_TYPES.get((a.get("Mang_Type") or "").strip(), mang_code or "Land manager")
+        gap = str(a.get("GAP_Sts") or "").strip()
+        land = ProtectedLand(
+            id=f"PADUS-{i}",
+            name=name,
+            designation=desig,
+            manager=mang,
+            distance_m=round(dist, 1),
+            bearing=_bearing_to(lat, lon, geometry, nearest_pt),
+            geometry=_to_geojson(geometry),
+            name_verified=True,
+            designation_code=des_tp or None,
+            gap_status=gap,
+            overlaps_footprint=footprint_overlaps(lat, lon, half_m, geometry),
+            source="USGS PAD-US (live query)",
         )
-    out.sort(key=lambda t: t[0])
-    return [p for _, p in out[:3]]
+        prev = best.get(name)
+        if prev is None or (land.gap_status or "9") < (prev.gap_status or "9") or (
+            land.overlaps_footprint and not prev.overlaps_footprint
+        ):
+            best[name] = land
+    out = sorted(best.values(), key=lambda p: (not p.overlaps_footprint, p.distance_m))
+    return out[:4]
 
 
 # --- orchestration ----------------------------------------------------------
+
+def half_width_m(acreage: float) -> float:
+    return math.sqrt(acreage * 4046.86) / 2
+
 
 async def fetch_all(
     lat: float, lon: float, acreage: float, state_code: Optional[str] = None
@@ -441,15 +599,15 @@ async def fetch_all(
 
     provenance values per layer:
       "live"        — service answered (may legitimately be an empty list)
-      "unavailable" — service unreachable / errored (no fabricated backfill)
+      "unavailable" — service unreachable / errored / over deadline (no fabricated backfill)
     """
-    half_m = math.sqrt(acreage * 4046.86) / 2
+    half_m = half_width_m(acreage)
     async with httpx.AsyncClient(timeout=TIMEOUT, headers={"User-Agent": "GridSentry/1.0"}) as client:
         wetlands, habitats, flood, protected = await asyncio.gather(
-            _fetch_wetlands(client, lat, lon, half_m, state_code),
-            _fetch_species(client, lat, lon, half_m),
-            _fetch_flood(client, lat, lon),
-            _fetch_protected(client, lat, lon),
+            _with_deadline(_fetch_wetlands(client, lat, lon, half_m, state_code)),
+            _with_deadline(_fetch_species(client, lat, lon, half_m)),
+            _with_deadline(_fetch_flood(client, lat, lon, half_m)),
+            _with_deadline(_fetch_protected(client, lat, lon, half_m)),
         )
     provenance = {
         "wetlands": "live" if wetlands is not None else "unavailable",
@@ -465,11 +623,3 @@ async def fetch_all(
         "provenance": provenance,
         "half_m": half_m,
     }
-
-
-async def fetch_wetlands_stateaware(
-    lat: float, lon: float, acreage: float, state_code: Optional[str]
-) -> Optional[list[Wetland]]:
-    half_m = math.sqrt(acreage * 4046.86) / 2
-    async with httpx.AsyncClient(timeout=TIMEOUT, headers={"User-Agent": "GridSentry/1.0"}) as client:
-        return await _fetch_wetlands(client, lat, lon, half_m, state_code)
