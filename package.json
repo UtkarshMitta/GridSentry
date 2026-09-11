@@ -6,8 +6,11 @@
     "dev": "concurrently -n web,api -c green,cyan \"npm run dev:web\" \"npm run dev:api\"",
     "dev:web": "npm run dev --workspace apps/web",
     "dev:api": "cd apps/api && ./.venv/bin/uvicorn main:app --reload --port 8000",
-    "setup:api": "cd apps/api && python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt",
-    "build": "npm run build --workspace apps/web"
+    "setup:api": "cd apps/api && python3 -m venv .venv && ./.venv/bin/pip install -r requirements-dev.txt",
+    "build": "npm run build --workspace apps/web",
+    "test:api": "cd apps/api && ./.venv/bin/python -m pytest",
+    "test:web": "npm test --workspace apps/web",
+    "test:live": "cd apps/api && GRIDSENTRY_LIVE=1 ./.venv/bin/python -m pytest tests/test_live_sites.py -v"
   },
   "workspaces": [
     "apps/web"
