@@ -1,4 +1,6 @@
-fastapi==0.115.8
+# pydantic >= 2.12 ships wheels for Python 3.14 (2.10 had none, so
+# `npm run setup:api` failed on a current python3).
+fastapi==0.115.14
 uvicorn[standard]==0.34.0
-pydantic==2.10.6
+pydantic==2.12.5
 httpx==0.28.1

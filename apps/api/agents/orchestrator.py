@@ -19,12 +19,15 @@ from . import critic, geolocation, legal, llm
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 
+# Demo pacing between progress messages (patched out in tests).
+_sleep = asyncio.sleep
+
 # (agent, message, pause_after_s) — pacing tuned so a full run lands ~15-20 s
 SCRIPT_INGEST = [
     ("system", "Reverse-geocoding coordinates to resolve state & county…", 0.6),
     ("system", "Cross-checking jurisdiction against state wetland program (web)…", 0.9),
     ("system", "Querying USFWS National Wetlands Inventory within 2 km…", 1.0),
-    ("system", "Querying USFWS critical habitat (ECOS) and PAD-US protected areas…", 0.9),
+    ("system", "Querying USFWS IPaC species & critical habitat and PAD-US protected areas…", 0.9),
     ("system", "Querying FEMA National Flood Hazard Layer…", 0.6),
 ]
 SCRIPT_GEO = [
@@ -35,7 +38,7 @@ SCRIPT_GEO = [
 SCRIPT_LEGAL = [
     ("legal", "Matching wetland findings to CWA § 404 / 33 CFR § 328.3 jurisdiction…", 1.2),
     ("legal", "Screening state wetland statutes and adjacent-area rules…", 1.2),
-    ("legal", "Determining NEPA review level (CE / EA / EIS) under 40 CFR § 1501.3…", 1.0),
+    ("legal", "Determining NEPA review level (CE / EA / EIS) under 42 U.S.C. § 4336…", 1.0),
     ("legal", "Drafting cited findings and alternative routing analysis…", 1.1),
 ]
 SCRIPT_CRITIC = [
@@ -61,10 +64,11 @@ async def _play(emit: Emit, script: list[tuple[str, str, float]], base: float, s
                 "ts": _now(),
             }
         )
-        await asyncio.sleep(pause)
+        await _sleep(pause)
 
 
 async def run_pipeline(run_id: str, site_input: SiteInput, emit: Emit) -> tuple[GISPayload, Report]:
+    llm.begin_run()
     # Phase 0 — grounding + ingestion
     await emit({"type": "status", "agent": "system", "state": "thinking", "message": SCRIPT_INGEST[0][1], "progress": 0.02, "ts": _now()})
     jurisdiction = await grounding.resolve_jurisdiction(site_input.lat, site_input.lon)
@@ -80,10 +84,18 @@ async def run_pipeline(run_id: str, site_input: SiteInput, emit: Emit) -> tuple[
             "ts": _now(),
         }
     )
+    # Coverage gate: every layer is a U.S. dataset. A point positively outside
+    # any U.S. state would come back "clean" from all of them — halt instead.
+    if jurisdiction.in_coverage is False:
+        status = land_status.outside_coverage(jurisdiction)
+        await emit({"type": "status", "agent": "system", "state": "done", "message": "GATE TRIPPED: coordinates are outside any U.S. state (U.S. Census + OpenStreetMap). Federal datasets have no coverage here. Halting standard assessment.", "progress": 0.2, "ts": _now()})
+        return await _run_infeasible(run_id, site_input, jurisdiction, status, emit)
+
     # Step 0.5 — Land Status Gate: ownership (PAD-US point-in-polygon) +
     # physical buildability (NLCD land-cover grid over the footprint).
-    acreage = gis_data.site_acreage(site_input.lat, site_input.lon)
-    await emit({"type": "status", "agent": "system", "state": "thinking", "message": f"Land Status Gate: checking federal ownership (PAD-US) + land cover across the {acreage}-acre footprint (NLCD)…", "progress": 0.12, "ts": _now()})
+    acreage, assumed = gis_data.resolve_acreage(site_input)
+    acreage_note = f"{acreage:g}-acre{' (assumed default)' if assumed else ''}"
+    await emit({"type": "status", "agent": "system", "state": "thinking", "message": f"Land Status Gate: checking federal ownership (PAD-US) + land cover across the {acreage_note} footprint (NLCD)…", "progress": 0.12, "ts": _now()})
     status = await land_status.check(site_input.lat, site_input.lon, acreage)
 
     if not status.developable:
@@ -94,7 +106,7 @@ async def run_pipeline(run_id: str, site_input: SiteInput, emit: Emit) -> tuple[
         else:
             hi = int(round((status.high_intensity_fraction or 0) * 100))
             detail = f"{hi}% medium/high-intensity developed cover (NLCD)" if status.land_cover_checked else "known dense urban core (offline reference)"
-            gate_msg = f"GATE TRIPPED: no buildable land — {detail}. A {acreage}-acre greenfield project cannot physically exist here. Halting standard assessment."
+            gate_msg = f"GATE TRIPPED: no buildable land — {detail}. A {acreage:g}-acre greenfield project cannot physically exist here. Halting standard assessment."
         await emit(
             {
                 "type": "status",
@@ -168,7 +180,7 @@ async def run_pipeline(run_id: str, site_input: SiteInput, emit: Emit) -> tuple[
         critic_notes=critic_out["notes"],
         citations=legal_out["citations"],
         generated_at=_now(),
-        engine=llm.engine(),
+        engine=llm.engine_used(),
     )
     return gis, report
 
@@ -180,36 +192,36 @@ async def _run_infeasible(
     status,
     emit: Emit,
 ) -> tuple[GISPayload, Report]:
-    """Short-circuit path: site is on non-developable federal land.
+    """Short-circuit path: the Land Status Gate says the site cannot host the project
+    (federal protected land, no buildable land, or outside U.S. coverage).
 
-    Skips the wetland/species template entirely and emits a 'not viable'
+    Skips the wetland/species analysis entirely and emits a 'not viable'
     verdict grounded in the land-status finding.
     """
-    # Minimal GIS payload (site only) so the map can still render the point.
-    gis = gis_data.ingest(site_input, jurisdiction)
+    # Site-only payload so the map can still render the point; environmental
+    # layers are 'not_assessed' — we are explicitly declining to assess them.
+    gis = gis_data.site_only(site_input, jurisdiction)
     gis.site.land_status = status
-    # Drop the simulated environmental features — they are not the story here
-    # and would imply an assessment we are explicitly declining to make.
-    gis.wetlands = []
-    gis.habitats = []
-    gis.protected_lands = []
-    gis.flood_zones = []
+    gis.sources += [f"Land status: {s['title']}" for s in status.sources]
 
     is_physical = status.category in ("urban_built", "open_water")
     await emit({"type": "status", "agent": "legal", "state": "start", "message": "Legal Compliance Officer engaged — evaluating site eligibility", "progress": 0.55, "ts": _now()})
-    await asyncio.sleep(1.0)
+    await _sleep(1.0)
     legal_out = legal.build_infeasible(gis)
     verdict_msg = (
         "Verdict: project not physically buildable at these coordinates."
         if is_physical
+        else "Verdict: outside analysis coverage — no U.S. jurisdiction."
+        if status.category == "outside_coverage"
         else "Verdict: development not legally possible."
     )
     await emit({"type": "status", "agent": "legal", "state": "done", "message": f"{verdict_msg} Cited {len(legal_out['citations'])} authorities.", "progress": 0.78, "ts": _now()})
 
     await emit({"type": "status", "agent": "critic", "state": "start", "message": "Red-Team Critic engaged — land-status sanity check", "progress": 0.82, "ts": _now()})
-    await asyncio.sleep(1.0)
+    await _sleep(1.0)
     critic_out = critic.infeasible_review(gis)
     await emit({"type": "status", "agent": "critic", "state": "done", "message": f"Confirmed non-viable verdict. Confidence {critic_out['confidence']}%.", "progress": 0.95, "ts": _now()})
+    await emit({"type": "status", "agent": "geolocation", "state": "done", "message": "Skipped — no spatial screening for a site the Land Status Gate halts.", "progress": 0.96, "ts": _now()})
 
     report = Report(
         run_id=run_id,
@@ -226,6 +238,6 @@ async def _run_infeasible(
         critic_notes=critic_out["notes"],
         citations=legal_out["citations"],
         generated_at=_now(),
-        engine=llm.engine(),
+        engine="deterministic",  # gated verdicts never consult an LLM
     )
     return gis, report

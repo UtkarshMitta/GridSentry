@@ -5,19 +5,29 @@ import {
   CircleMarker,
   GeoJSON,
   MapContainer,
-  Polyline,
   Popup,
   TileLayer,
   useMap,
   useMapEvents,
 } from "react-leaflet";
-import type { GISPayload, GeoJSONGeometry } from "@/lib/types";
+import type { GISPayload } from "@/lib/types";
 import "leaflet/dist/leaflet.css";
 
+// Keyless dark basemap. (CARTO's dark_all tiles now require an API key and
+// serve an "API KEY REQUIRED" watermark without one.) Override with
+// NEXT_PUBLIC_TILE_URL to use another provider.
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas";
 const TILE_URL =
-  "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
-const TILE_ATTR =
-  '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+  process.env.NEXT_PUBLIC_TILE_URL || `${ESRI}/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}`;
+const LABEL_URL = process.env.NEXT_PUBLIC_TILE_URL
+  ? null
+  : `${ESRI}/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}`;
+const ESRI_ATTR =
+  'Tiles &copy; <a href="https://www.esri.com">Esri</a> &mdash; Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+// A custom tile provider brings its own attribution (never show Esri's for it).
+const TILE_ATTR = process.env.NEXT_PUBLIC_TILE_URL
+  ? process.env.NEXT_PUBLIC_TILE_ATTRIBUTION || ""
+  : ESRI_ATTR;
 
 export interface SiteMapProps {
   center: [number, number];
@@ -25,7 +35,6 @@ export interface SiteMapProps {
   marker?: [number, number] | null;
   onPick?: (lat: number, lon: number) => void;
   gis?: GISPayload | null;
-  altRoute?: GeoJSONGeometry | null;
   interactive?: boolean;
   className?: string;
 }
@@ -33,7 +42,9 @@ export interface SiteMapProps {
 function ClickHandler({ onPick }: { onPick: (lat: number, lon: number) => void }) {
   useMapEvents({
     click(e) {
-      onPick(e.latlng.lat, e.latlng.lng);
+      // Wrap so a click on a panned-around world copy stays within ±180°.
+      const { lat, lng } = e.latlng.wrap();
+      onPick(lat, lng);
     },
   });
   return null;
@@ -47,17 +58,12 @@ function FlyTo({ target, zoom }: { target: [number, number]; zoom: number }) {
   return null;
 }
 
-function lineCoords(geometry: GeoJSONGeometry): [number, number][] {
-  return (geometry.coordinates as [number, number][]).map(([lon, lat]) => [lat, lon]);
-}
-
 export default function SiteMapInner({
   center,
   zoom = 13,
   marker,
   onPick,
   gis,
-  altRoute,
   interactive = true,
   className,
 }: SiteMapProps) {
@@ -71,7 +77,8 @@ export default function SiteMapInner({
       zoomControl={interactive}
       attributionControl
     >
-      <TileLayer url={TILE_URL} attribution={TILE_ATTR} />
+      <TileLayer url={TILE_URL} attribution={TILE_ATTR} maxNativeZoom={16} maxZoom={19} />
+      {LABEL_URL && <TileLayer url={LABEL_URL} maxNativeZoom={16} maxZoom={19} />}
       {onPick && <ClickHandler onPick={onPick} />}
       {marker && <FlyTo target={marker} zoom={Math.max(zoom, 13)} />}
 
@@ -126,29 +133,6 @@ export default function SiteMapInner({
               </Popup>
             </GeoJSON>
           ))}
-          {gis.habitats
-            .filter((h) => h.geometry && (h.geometry.coordinates as unknown[])?.length)
-            .map((h) => (
-              <GeoJSON
-                key={h.id}
-                data={h.geometry as GeoJSON.GeoJsonObject}
-                style={{ color: "#E8B25A", weight: 1.5, dashArray: "4 4", fillOpacity: 0.14 }}
-              >
-                <Popup>
-                  <strong>{h.common_name}</strong> <em>({h.species})</em>
-                  <br />
-                  {h.status} — {h.unit_name}
-                  {h.distance_m != null && (
-                    <>
-                      <br />
-                      {(h.distance_m / 1000).toFixed(1)} km {h.bearing}
-                    </>
-                  )}
-                  <br />
-                  <em>{h.source}</em>
-                </Popup>
-              </GeoJSON>
-            ))}
           {gis.protected_lands.map((p) => (
             <GeoJSON
               key={p.id}
@@ -159,8 +143,11 @@ export default function SiteMapInner({
                 <strong>{p.name}</strong>
                 <br />
                 {p.designation} · {p.manager}
+                {p.gap_status && <> · GAP {p.gap_status}</>}
                 <br />
-                {(p.distance_m / 1000).toFixed(1)} km {p.bearing}
+                {p.overlaps_footprint
+                  ? "Overlaps the project footprint"
+                  : `${(p.distance_m / 1000).toFixed(1)} km ${p.bearing}`}
               </Popup>
             </GeoJSON>
           ))}
@@ -172,6 +159,7 @@ export default function SiteMapInner({
             >
               <Popup>
                 <strong>FEMA Zone {f.zone}</strong>
+                {f.sfha && <> · base floodplain</>}
                 <br />
                 {f.description}
               </Popup>
@@ -180,14 +168,6 @@ export default function SiteMapInner({
         </>
       )}
 
-      {altRoute && (
-        <Polyline
-          positions={lineCoords(altRoute)}
-          pathOptions={{ color: "#35C78F", weight: 3, dashArray: "8 6", opacity: 0.9 }}
-        >
-          <Popup>Alternative A — southern interconnection corridor</Popup>
-        </Polyline>
-      )}
     </MapContainer>
   );
 }

@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const API_URL =
-  process.env.API_URL ??
+  process.env.API_URL ||
   (process.env.NODE_ENV === "development"
     ? "http://localhost:8000"
     : "https://gridsentry-api.onrender.com");

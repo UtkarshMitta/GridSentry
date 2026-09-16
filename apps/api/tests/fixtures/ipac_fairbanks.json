@@ -1,0 +1,65 @@
+{
+ "resources": {
+  "allReferencedPopulationsBySid": {
+   "Population$Sid[11670]": {
+    "groupCode": "A",
+    "groupName": "Mammals",
+    "listingStatusCode": "EXPN",
+    "listingStatusName": "Experimental Population, Non-Essential",
+    "optionalCommonName": "Wood Bison",
+    "optionalListingStatusDescription": "A species listed as experimental and non-essential",
+    "optionalPopulationDescription": "U.S.A. (Alaska)",
+    "optionalScientificName": "Bison bison athabascae",
+    "optionalSpeciesDescription": "The Wood Bison is the largest Canadian terrestrial mammal. It is dark brown, with a massive head, a high hump on its large shoulders, and long shaggy hair on its shoulders and front legs. The short legs end in rounded hooves. The short and black horns curve inward on the males, but are straight on the females. There are two moults every year, one in the spring and one in the fall. The males are larger than the females; an adult male measures 3.04 to 3.8 m in length and 1.67 to 1.82 m in height (at the shoulders), and weighs between 350 and 1000 kg. Consultation on the experimental population of wood bison in Alaska is only required if a project intersects National Wildlife Refuge or National Park System lands. https://www.fws.gov/question-answer/wood-bison-consultation-frequently-asked-questions",
+    "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc3634.jpg",
+    "shortName": "Wood Bison",
+    "sid": {
+     "id": 11670,
+     "val": "Population$Sid[11670]"
+    },
+    "speciesId": 8362,
+    "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/8362"
+   }
+  },
+  "populationsBySid": {
+   "Population$Sid[11670]": {
+    "conditional": false,
+    "conditions": [],
+    "crithabInFootprint": false,
+    "optionalFederalRegisterCrithabStatus": null,
+    "population": {
+     "groupCode": "A",
+     "groupName": "Mammals",
+     "listingStatusCode": "EXPN",
+     "listingStatusName": "Experimental Population, Non-Essential",
+     "optionalCommonName": "Wood Bison",
+     "optionalListingStatusDescription": "A species listed as experimental and non-essential",
+     "optionalPopulationDescription": "U.S.A. (Alaska)",
+     "optionalScientificName": "Bison bison athabascae",
+     "optionalSpeciesDescription": "The Wood Bison is the largest Canadian terrestrial mammal. It is dark brown, with a massive head, a high hump on its large shoulders, and long shaggy hair on its shoulders and front legs. The short legs end in rounded hooves. The short and black horns curve inward on the males, but are straight on the females. There are two moults every year, one in the spring and one in the fall. The males are larger than the females; an adult male measures 3.04 to 3.8 m in length and 1.67 to 1.82 m in height (at the shoulders), and weighs between 350 and 1000 kg. Consultation on the experimental population of wood bison in Alaska is only required if a project intersects National Wildlife Refuge or National Park System lands. https://www.fws.gov/question-answer/wood-bison-consultation-frequently-asked-questions",
+     "optionalSpeciesImagePath": "https://ecos.fws.gov/docs/species_images/doc3634.jpg",
+     "shortName": "Wood Bison",
+     "sid": {
+      "id": 11670,
+      "val": "Population$Sid[11670]"
+     },
+     "speciesId": 8362,
+     "speciesProfileUrl": "https://ecos.fws.gov/ecp/species/8362"
+    },
+    "ranges": [
+     {
+      "conditional": false,
+      "fieldOfficeSid": {
+       "id": 71470,
+       "val": "FwsOffice$Sid[71470]"
+      },
+      "optionalCondition": null,
+      "seasons": []
+     }
+    ],
+    "tessDocuments": []
+   }
+  },
+  "crithabs": []
+ }
+}

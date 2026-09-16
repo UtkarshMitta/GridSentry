@@ -32,10 +32,12 @@ body {
   background: transparent;
 }
 
-/* Leaflet dark-theme adjustments */
+/* Leaflet dark-theme adjustments. !important because leaflet.css loads later
+   (with the lazily imported map chunk) and would otherwise win, leaving a
+   light #ddd background showing through sub-pixel seams between tiles. */
 .leaflet-container {
-  background: #0b0f14;
-  font-family: inherit;
+  background: #0b0f14 !important;
+  font-family: inherit !important;
 }
 .leaflet-control-zoom a {
   background: #161d26 !important;

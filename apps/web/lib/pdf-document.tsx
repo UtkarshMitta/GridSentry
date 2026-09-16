@@ -6,6 +6,7 @@ import {
   Text,
   View,
 } from "@react-pdf/renderer";
+import { isSimulated, reportLevelNotes, riskHeadline, verdictLabel } from "./report";
 import type { Report, Run } from "./types";
 
 const RISK_COLORS: Record<string, string> = {
@@ -66,6 +67,8 @@ function citationLabels(report: Report, ids: string[]): string {
 export function ReportPDF({ run }: { run: Run }) {
   const report = run.report!;
   const gis = run.gis!;
+  const simulated = isSimulated(run);
+  const globalNotes = reportLevelNotes(report);
 
   return (
     <Document
@@ -80,30 +83,40 @@ export function ReportPDF({ run }: { run: Run }) {
             {report.developable
               ? "Draft Environmental Impact Assessment"
               : "Site Eligibility Determination"}{" "}
-            · {gis.site.lat.toFixed(4)}, {gis.site.lon.toFixed(4)} · {gis.site.acreage} acres ·{" "}
+            · {gis.site.lat.toFixed(4)}, {gis.site.lon.toFixed(4)} · {gis.site.acreage} acres
+            {gis.site.acreage_assumed ? " (assumed)" : ""} ·{" "}
             {gis.site.project_type.toUpperCase()} · Generated{" "}
             {new Date(report.generated_at).toLocaleDateString()} ·{" "}
-            {report.developable ? (
+            {report.developable && simulated ? (
+              <Text style={{ color: "#C0392B", fontWeight: 700 }}>
+                SIMULATED DATA — NO REAL RISK SCORE
+              </Text>
+            ) : report.developable ? (
               <>
                 Overall risk:{" "}
-                <Text style={{ color: RISK_COLORS[report.risk_level], fontWeight: 700 }}>
-                  {report.risk_level.toUpperCase()} ({report.risk_score}/100)
+                <Text
+                  style={{
+                    color: riskHeadline(run).incomplete ? "#B9770E" : RISK_COLORS[report.risk_level],
+                    fontWeight: 700,
+                  }}
+                >
+                  {riskHeadline(run).text.toUpperCase()}
                 </Text>
               </>
             ) : (
               <Text style={{ color: "#C0392B", fontWeight: 700 }}>
-                VERDICT: NOT VIABLE —{" "}
-                {report.land_status.category === "urban_built"
-                  ? "NO BUILDABLE LAND (URBAN CORE)"
-                  : report.land_status.category === "open_water"
-                    ? "OPEN WATER"
-                    : "FEDERAL PROTECTED LAND"}
+                VERDICT: NOT VIABLE — {verdictLabel(report.land_status.category).toUpperCase()}
               </Text>
             )}{" "}
             · Red-team confidence {report.confidence}%
           </Text>
           {!report.developable &&
-            (report.land_status.category === "federal_protected" ? (
+            (report.land_status.category === "outside_coverage" ? (
+              <Text style={[styles.body, { color: "#C0392B", marginTop: 6, fontWeight: 700 }]}>
+                No U.S. state jurisdiction at these coordinates (U.S. Census Bureau + OpenStreetMap).
+                The federal datasets this assessment relies on do not cover this location.
+              </Text>
+            ) : report.land_status.category === "federal_protected" ? (
               <Text style={[styles.body, { color: "#C0392B", marginTop: 6, fontWeight: 700 }]}>
                 Site falls within {report.land_status.unit_name} (
                 {report.land_status.designation}, {report.land_status.manager}).
@@ -129,6 +142,20 @@ export function ReportPDF({ run }: { run: Run }) {
         <Text style={styles.h2}>Executive Summary</Text>
         <Text style={styles.body}>{report.executive_summary}</Text>
 
+        {globalNotes.length > 0 && (
+          <>
+            <Text style={styles.h2}>Red-Team Review</Text>
+            {globalNotes.map((n) => (
+              <View key={n.id} style={styles.noteBox} wrap={false}>
+                <Text style={[styles.listItem, { color: "#C0392B", fontWeight: 700 }]}>
+                  RED-TEAM {n.severity.toUpperCase()}
+                </Text>
+                <Text style={styles.listItem}>{n.note}</Text>
+              </View>
+            ))}
+          </>
+        )}
+
         {report.stop_work_risks.length > 0 && (
           <>
             <Text style={styles.h2}>Stop-Work Risks</Text>
@@ -147,8 +174,8 @@ export function ReportPDF({ run }: { run: Run }) {
         {report.sections.map((s) => (
           <View key={s.id}>
             <Text style={styles.h2}>{s.title}</Text>
-            <Text style={[styles.riskChip, { color: RISK_COLORS[s.risk] }]}>
-              SECTION RISK: {s.risk.toUpperCase()}
+            <Text style={[styles.riskChip, { color: RISK_COLORS[s.risk] ?? RISK_COLORS.none }]}>
+              SECTION RISK: {s.risk === "unknown" ? "NOT ASSESSED" : s.risk.toUpperCase()}
             </Text>
             <Text style={styles.body}>{s.summary}</Text>
             {s.findings.map((f) => (

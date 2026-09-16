@@ -17,6 +17,9 @@ class SiteInput(BaseModel):
     lon: float = Field(ge=-180, le=180)
     project_type: ProjectType = "solar"
     name: Optional[str] = None
+    # Proposed project footprint in acres. Optional: when omitted a fixed,
+    # clearly-labelled default is assumed (never a per-coordinate guess).
+    acreage: Optional[float] = Field(default=None, ge=1, le=50_000)
 
 
 class Jurisdiction(BaseModel):
@@ -27,19 +30,23 @@ class Jurisdiction(BaseModel):
     locality: Optional[str] = None       # town/city
     country_code: Optional[str] = None
     verified: bool = False               # cross-checked against web sources
-    method: str = "unresolved"           # nominatim+tavily | nominatim | bbox-fallback | unresolved
+    method: str = "unresolved"           # nominatim+census[+tavily] | census | nominatim | conflict | bbox-fallback | unresolved
+    # True: inside a U.S. state/territory (datasets apply). False: positively
+    # outside (foreign country / open ocean). None: lookups failed, unknown.
+    in_coverage: Optional[bool] = None
     sources: list[dict[str, str]] = []   # {title, url} used for verification
 
 
 class LandStatus(BaseModel):
     """Result of the Land Status Gate — ownership + physical buildability."""
     developable: bool = True
-    category: str = "developable"        # developable | federal_protected | urban_built | open_water
+    category: str = "developable"        # developable | federal_protected | urban_built | open_water | outside_coverage
     owner_type: Optional[str] = None     # e.g. "Federal"
     manager: Optional[str] = None        # e.g. "National Park Service"
     manager_code: Optional[str] = None   # e.g. "NPS"
     unit_name: Optional[str] = None      # e.g. "Grand Canyon National Park"
     designation: Optional[str] = None    # e.g. "National Park"
+    designation_code: Optional[str] = None  # PAD-US Des_Tp code, e.g. "NP", "WA"
     gap_status: str = ""                 # PAD-US GAP status code (1-4)
     # Land-cover / buildability check (NLCD grid sample over the footprint)
     land_cover_checked: bool = False
@@ -59,6 +66,7 @@ class Site(BaseModel):
     project_type: ProjectType
     name: str
     acreage: float
+    acreage_assumed: bool = False  # True when the caller gave no acreage and a default was used
     footprint: dict[str, Any]  # GeoJSON Polygon
     jurisdiction: Jurisdiction = Jurisdiction()
     land_status: LandStatus = LandStatus()
@@ -76,7 +84,7 @@ class Wetland(BaseModel):
     state_class: Optional[str] = None  # e.g. "NYS Class I"
     geometry: dict[str, Any]
     name_verified: bool = False        # name confirmed against real-world sources
-    crosses_footprint: bool = False    # polygon within the project footprint half-width
+    crosses_footprint: bool = False    # polygon intersects the project footprint square
     source: str = "USFWS National Wetlands Inventory"
 
 
@@ -86,11 +94,8 @@ class Habitat(BaseModel):
     common_name: str
     status: str                  # "Endangered" | "Threatened" | proposed/candidate label
     unit_name: str
-    distance_m: Optional[float] = None   # only when a mapped critical-habitat polygon exists
-    bearing: Optional[str] = None
-    geometry: Optional[dict[str, Any]] = None
-    basis: str = "ipac_species_list"     # ipac_species_list | critical_habitat
-    currently_listed: bool = True        # False for proposed/candidate species
+    basis: str = "ipac_species_list"     # ipac_species_list | critical_habitat | proposed_critical_habitat
+    currently_listed: bool = True        # False for proposed/candidate/non-§7 taxa (e.g. NEP, SAT)
     source: str = "USFWS Critical Habitat (ECOS)"
 
 
@@ -103,6 +108,9 @@ class ProtectedLand(BaseModel):
     bearing: str
     geometry: dict[str, Any]
     name_verified: bool = False
+    designation_code: Optional[str] = None  # PAD-US Des_Tp
+    gap_status: str = ""                    # PAD-US GAP 1-4 (1-2 = managed for biodiversity)
+    overlaps_footprint: bool = False
     source: str = "USGS Protected Areas Database (PAD-US)"
 
 
@@ -112,12 +120,14 @@ class FloodZone(BaseModel):
     description: str
     distance_m: float
     geometry: dict[str, Any]
+    sfha: bool = False                 # Special Flood Hazard Area (1% annual chance, A*/V* zones)
+    overlaps_footprint: bool = False
     source: str = "FEMA National Flood Hazard Layer"
 
 
 class DataProvenance(BaseModel):
     """Per-layer record of whether real live data backed each section."""
-    wetlands: str = "unavailable"    # live | unavailable | simulated
+    wetlands: str = "unavailable"    # live | unavailable | simulated | not_assessed
     species: str = "unavailable"
     flood: str = "unavailable"
     protected: str = "unavailable"
@@ -129,6 +139,9 @@ class DataProvenance(BaseModel):
     @property
     def any_simulated(self) -> bool:
         return any(v == "simulated" for v in (self.wetlands, self.species, self.flood, self.protected))
+
+    def unavailable_layers(self) -> list[str]:
+        return [k for k in ("wetlands", "species", "flood", "protected") if getattr(self, k) == "unavailable"]
 
 
 class GISPayload(BaseModel):
@@ -162,7 +175,7 @@ class Finding(BaseModel):
 class ReportSection(BaseModel):
     id: str
     title: str
-    risk: Literal["high", "moderate", "low", "none"]
+    risk: Literal["high", "moderate", "low", "none", "unknown"]  # unknown = data unavailable
     summary: str
     findings: list[Finding]
     citation_ids: list[str] = []
@@ -173,7 +186,6 @@ class Alternative(BaseModel):
     title: str
     description: str
     impact_reduction: str
-    geometry: Optional[dict[str, Any]] = None  # GeoJSON LineString or Polygon
 
 
 class CriticNote(BaseModel):

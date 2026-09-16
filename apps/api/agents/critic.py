@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from models import CriticNote, GISPayload, StopWorkRisk
+from models import CriticNote, GISPayload, ProtectedLand, StopWorkRisk
 
 from . import llm
 
@@ -21,6 +21,27 @@ def is_vegetated_wetland(classification: str) -> bool:
     code = (classification or "").upper()
     return any(code.startswith(p) for p in VEGETATED_PREFIXES)
 
+
+# PAD-US designation codes for dedicated public parkland. GAP status measures
+# biodiversity management, not dedication: Harriman State Park is GAP 4, yet
+# converting it to a utility use would need legislative approval.
+PARKLAND_CODES = {"NP", "SP", "LP", "SREC", "LREC"}
+
+
+def is_parkland(p: ProtectedLand) -> bool:
+    return (p.designation_code or "") in PARKLAND_CODES or "park" in (p.designation or "").lower()
+
+
+def protected_overlap_severity(p: ProtectedLand) -> str:
+    """How much a PAD-US unit constrains the footprint: high | moderate | low."""
+    if not p.overlaps_footprint:
+        return "low"
+    if p.gap_status in ("1", "2") or (is_parkland(p) and p.distance_m <= 0):
+        return "high"
+    if is_parkland(p) or p.gap_status == "3":
+        return "moderate"
+    return "low"
+
 SYSTEM = """You are the Red-Team Critic on an environmental permitting team.
 Adversarially review a draft NEPA assessment. Return JSON:
 {"notes": [{"severity": "blocker|warning|info", "target": "<section id>", "note": "..."}],
@@ -31,8 +52,12 @@ Challenge unstated assumptions, survey gaps, and weak citations. Be specific."""
 def infeasible_review(gis: GISPayload) -> dict[str, Any]:
     """Red-team content for a Land-Status-gated (non-developable) site."""
     ls = gis.site.land_status
+    if ls.category == "outside_coverage":
+        return _out_of_coverage_review()
     if ls.category in ("urban_built", "open_water"):
         return _unbuildable_review(gis)
+    from .legal import federal_cites  # local import: legal imports this module
+
     unit = ls.unit_name or "a federal protected area"
     notes = [
         CriticNote(
@@ -69,7 +94,7 @@ def infeasible_review(gis: GISPayload) -> dict[str, Any]:
                 "a federal trespass/violation and cannot be cured by a state or Corps permit."
             ),
             trigger="Any site work prior to (improbable) Congressional/agency authorization",
-            citation_ids=["nps-organic", "nepa-4332"],
+            citation_ids=federal_cites(ls.designation_code, ls.manager_code),
         )
     ]
     return {
@@ -137,7 +162,7 @@ def _unbuildable_review(gis: GISPayload) -> dict[str, Any]:
                    else "large-scale acquisition and demolition of existing urban development — a categorically different action requiring a new proposal and full re-analysis.")
             ),
             trigger="Any permitting submission using the current coordinates and acreage",
-            citation_ids=["ceq-1501", "nepa-4332"],
+            citation_ids=["nepa-4336", "nepa-4332"],
         )
     ]
     return {
@@ -147,7 +172,26 @@ def _unbuildable_review(gis: GISPayload) -> dict[str, Any]:
     }
 
 
-def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
+def _out_of_coverage_review() -> dict[str, Any]:
+    """Red-team content for coordinates outside U.S. state jurisdiction."""
+    notes = [
+        CriticNote(
+            id="cn-cov-1",
+            severity="blocker",
+            target="coverage",
+            note=(
+                "Coverage sanity check: every environmental layer this tool uses is a U.S. dataset. "
+                "Had the pipeline run here, each would have returned an empty result and the report "
+                "would have read as a clean site eligible for a Categorical Exclusion — a false "
+                "negative. The correct output is 'outside analysis coverage', which this report gives. "
+                "Most often this means latitude/longitude were swapped or a sign was dropped."
+            ),
+        )
+    ]
+    return {"notes": [n.model_dump() for n in notes], "stop_work_risks": [], "confidence": 90}
+
+
+def _fallback(gis: GISPayload) -> dict[str, Any]:
     jur = gis.site.jurisdiction
     prov = gis.provenance
     crossing = [w for w in gis.wetlands if w.crosses_footprint]
@@ -186,19 +230,24 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
             )
 
     # Grounding integrity: a wrong-state citation or unverified jurisdiction
-    # makes state-law conclusions unusable.
+    # makes state-law conclusions unusable, so they are withheld entirely.
     if not jur.verified or not jur.state:
+        if jur.method == "conflict":
+            why = f"reverse geocoding and U.S. Census boundaries disagree on the state (Census: {jur.state})"
+        elif jur.state:
+            why = f"it was resolved as {jur.state} ({jur.method}) but not confirmed against U.S. Census boundaries"
+        else:
+            why = "it could not be resolved at all"
         notes.append(
             CriticNote(
                 id="cn-jur",
                 severity="blocker",
                 target="report",
                 note=(
-                    "JURISDICTION NOT VERIFIED: the state used for all state-law citations was "
-                    f"{'resolved as ' + jur.state + ' but not confirmed against an authoritative source' if jur.state else 'not resolved at all'} "
-                    f"(method: {jur.method}). Do not rely on any state regulation in this draft "
-                    "until the site's state and county are confirmed — a wrong-state citation "
-                    "voids the compliance analysis."
+                    f"JURISDICTION NOT VERIFIED: {why}. All state wetland-law citations have been "
+                    "withheld from this draft, so state permitting obligations are NOT analysed. "
+                    "Confirm the site's state and county before relying on this report — a "
+                    "wrong-state citation voids the compliance analysis."
                 ),
             )
         )
@@ -217,9 +266,27 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
         )
+    if not ls.land_cover_checked:
+        outside_conus = jur.state_code in ("AK", "HI") or jur.country_code not in (None, "us")
+        why = (
+            "NLCD 2021 covers only the contiguous U.S." if outside_conus
+            else "the NLCD land-cover query was unavailable"
+        )
+        notes.append(
+            CriticNote(
+                id="cn-cover",
+                severity="warning",
+                target="report",
+                note=(
+                    f"Physical buildability was NOT verified: {why}. The footprint was not screened "
+                    "for dense urban development or open water — confirm against current imagery "
+                    "that the site is open land."
+                ),
+            )
+        )
     # Analytical red-team notes, conditional on what the live data returned.
     if crossing:
-        head = crossing[0]
+        head = next((w for w in crossing if is_vegetated_wetland(w.classification)), crossing[0])
         notes.append(
             CriticNote(
                 id="cn-1",
@@ -244,6 +311,19 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
                     "Wetlands are mapped near, but not within, the footprint. Confirm the setback "
                     "survives final array layout and stormwater design; NWI is a desktop screen and a "
                     "delineation may shift boundaries."
+                ),
+            )
+        )
+    if gis.site.acreage_assumed:
+        notes.append(
+            CriticNote(
+                id="cn-acre",
+                severity="info",
+                target="report",
+                note=(
+                    f"No project acreage was supplied, so a {gis.site.acreage:.0f}-acre square footprint "
+                    "was assumed. Every 'inside the footprint' finding depends on that assumption — "
+                    "re-run with the actual layout acreage."
                 ),
             )
         )
@@ -272,14 +352,17 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
-    # State permit label + citations follow the resolved jurisdiction.
-    state_permit = {
-        "NY": ("an Article 24 Freshwater Wetlands permit", ["nycrr-663", "ecl-24"]),
-        "NJ": ("an NJDEP Freshwater Wetlands / transition-area permit", ["njsa-13-9b", "njac-77a"]),
-    }.get(jur.state_code or "", ("the applicable state wetland permit", ["eo-11990"]))
+    # State permit label + citations follow the *verified* jurisdiction.
+    from .legal import state_wetland_cites  # local import: legal imports this module
+
+    permit_label = {
+        "NY": "an Article 24 Freshwater Wetlands permit",
+        "NJ": "an NJDEP Freshwater Wetlands / transition-area permit",
+    }.get(jur.state_code if jur.verified else "", "the applicable state wetland permit")
+    state_permit = (permit_label, state_wetland_cites(jur))
     stop_work: list[StopWorkRisk] = []
     if crossing:
-        head = crossing[0]
+        head = next((w for w in crossing if is_vegetated_wetland(w.classification)), crossing[0])
         stop_work.append(
             StopWorkRisk(
                 id="sw-1",
@@ -290,7 +373,11 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
                     + (f" and {state_permit[0]}" if head.state_protected else "")
                     + " issues constitutes a violation subject to stop-work orders and restoration liability."
                 ),
-                trigger="Mobilization on the eastern array/interconnection area before permits issue",
+                trigger=(
+                    "Mobilization on the array/interconnection area around the mapped wetland "
+                    + ("(at the site centroid)" if head.distance_m <= 0 else f"({head.distance_m:.0f} m {head.bearing} of centroid)")
+                    + " before permits issue"
+                ),
                 citation_ids=["cwa-404"] + (state_permit[1] if head.state_protected else []),
             )
         )
@@ -305,6 +392,26 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
                 ),
                 trigger="Vegetation clearing or grading before § 7 consultation concludes",
                 citation_ids=["esa-7", "cfr-402"],
+            )
+        )
+    blocking_lands = [p for p in gis.protected_lands if protected_overlap_severity(p) == "high"]
+    if blocking_lands:
+        p = blocking_lands[0]
+        why = (
+            f"which PAD-US records as GAP {p.gap_status} (managed for biodiversity)"
+            if p.gap_status in ("1", "2") else "dedicated public parkland"
+        )
+        stop_work.append(
+            StopWorkRisk(
+                id="sw-3",
+                title=f"Construction on protected land — {p.name}",
+                detail=(
+                    f"The footprint overlaps {p.name} ({p.designation}, {p.manager}), {why}. Site "
+                    "work without the land manager's written authorization is trespass, and no "
+                    "environmental permit substitutes for that authorization."
+                ),
+                trigger="Any survey staking, clearing, or access-road work inside the unit",
+                citation_ids=["nepa-4332"],
             )
         )
     # Confidence reflects how much we can trust the draft. Live, verified data
@@ -325,21 +432,26 @@ def _fallback(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-# Numeric weight per section risk level, summed into an overall 0-100 score.
 def score_risk(gis: GISPayload) -> tuple[str, int]:
-    """Data-driven overall risk from the actual live features."""
+    """Data-driven overall risk (0-100) from the actual live features.
+
+    Any single controlling constraint — a vegetated wetland in the footprint,
+    designated critical habitat, or conservation land in the footprint —
+    reaches HIGH (>= 65) on its own; lesser constraints accumulate.
+    """
     crossing = [w for w in gis.wetlands if w.crosses_footprint]
     nearby = [w for w in gis.wetlands if not w.crosses_footprint]
     crithab = [h for h in gis.habitats if h.basis == "critical_habitat"]
+    prop_ch = [h for h in gis.habitats if h.basis == "proposed_critical_habitat"]
     listed = [h for h in gis.habitats if h.currently_listed]
-
     veg_crossing = [w for w in crossing if is_vegetated_wetland(w.classification)]
+
     score = 8  # baseline for any greenfield build
     if veg_crossing:
         # Vegetated wetland (marsh/forested/scrub) in the footprint — the serious case.
-        score += 45 + min(12, (len(veg_crossing) - 1) * 4)
+        score += 57 + min(12, (len(veg_crossing) - 1) * 4)
         if any(w.state_protected for w in veg_crossing):
-            score += 8
+            score += 6
     elif crossing:
         # Only open-water / excavated ponds in the footprint — a designable-around
         # constraint (panels are routed around them), never on its own a HIGH.
@@ -348,21 +460,28 @@ def score_risk(gis: GISPayload) -> tuple[str, int]:
         nearest = min(w.distance_m for w in nearby)
         score += 14 if nearest < 300 else 6
     if crithab:
-        score += 30
+        score += 57
+    elif prop_ch:
+        score += 20
     elif listed:
         score += 12
-    if gis.flood_zones:
-        f = gis.flood_zones[0]
-        score += 10 if f.distance_m <= 1.0 else 4
+    land_sev = {protected_overlap_severity(p) for p in gis.protected_lands}
+    if "high" in land_sev:
+        score += 57
+    elif "moderate" in land_sev:
+        score += 12
+    sfha = [f for f in gis.flood_zones if f.sfha]
+    if any(f.overlaps_footprint for f in sfha):
+        score += 10
+    elif sfha:
+        score += 4
     score = max(3, min(score, 96))
     level = "high" if score >= 65 else ("moderate" if score >= 35 else "low")
     return level, score
 
 
 async def run(gis: GISPayload, legal: dict[str, Any]) -> dict[str, Any]:
-    fallback = _fallback(gis, legal)
-    jur = gis.site.jurisdiction
-    prov = gis.provenance
+    fallback = _fallback(gis)
     # Provenance + grounding-integrity notes are never overridden by the LLM.
     pinned_ids = ("cn-prov", "cn-jur", "cn-land-check")
     grounding_notes = [n for n in fallback["notes"] if n["id"] in pinned_ids]

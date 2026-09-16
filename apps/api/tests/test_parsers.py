@@ -1,0 +1,275 @@
+"""Parsers for each live federal service, fed recorded / trimmed real payloads."""
+from __future__ import annotations
+
+import copy
+import json
+
+import httpx
+import pytest
+import respx
+
+import geodata
+import land_status
+from conftest import LAT, LON, esri_square, load_fixture
+
+
+
+# --- IPaC -------------------------------------------------------------------
+
+async def _species(payload, lat=38.47, lon=-98.66):
+    with respx.mock:
+        respx.post(geodata.IPAC_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            return await geodata._fetch_species(client, lat, lon, 400)
+
+
+async def test_ipac_designated_critical_habitat_is_detected():
+    """Recorded response for Cheyenne Bottoms, KS (whooping crane critical habitat)."""
+    habs = {h.common_name: h for h in await _species(load_fixture("ipac_cheyenne_bottoms.json"))}
+    assert habs["Whooping crane"].basis == "critical_habitat"
+    assert habs["Piping Plover"].basis == "ipac_species_list"
+    assert habs["Monarch butterfly"].currently_listed is False  # proposed threatened
+
+
+async def test_ipac_proposed_critical_habitat_is_distinguished():
+    payload = copy.deepcopy(load_fixture("ipac_cheyenne_bottoms.json"))
+    for ch in payload["resources"]["crithabs"]:
+        ch["type"] = "Proposed"
+    habs = {h.common_name: h for h in await _species(payload)}
+    assert habs["Whooping crane"].basis == "proposed_critical_habitat"
+
+
+async def test_ipac_nonessential_experimental_population_not_treated_as_listed():
+    """ESA §10(j): NEP populations are treated as proposed for §7 purposes."""
+    habs = await _species(load_fixture("ipac_fairbanks.json"), 64.84, -147.72)
+    bison = next(h for h in habs if h.common_name == "Wood Bison")
+    assert bison.currently_listed is False
+
+
+async def test_ipac_failure_returns_none():
+    with respx.mock:
+        respx.post(geodata.IPAC_URL).mock(return_value=httpx.Response(503))
+        async with httpx.AsyncClient() as client:
+            assert await geodata._fetch_species(client, LAT, LON, 400) is None
+
+
+# --- FEMA NFHL --------------------------------------------------------------
+
+def _fema_feature(zone, subty, geom):
+    return {"attributes": {"FLD_ZONE": zone, "ZONE_SUBTY": subty}, "geometry": geom}
+
+
+async def test_fema_zone_classification():
+    inside = esri_square(LAT, LON, 0, 0, 100)
+    payload = {"features": [
+        _fema_feature("A", None, inside),
+        _fema_feature("X", "0.2 PCT ANNUAL CHANCE FLOOD HAZARD", esri_square(LAT, LON, 400, 0, 50)),
+        _fema_feature("D", None, esri_square(LAT, LON, -400, 0, 50)),
+        _fema_feature("X", "AREA OF MINIMAL FLOOD HAZARD", inside),
+        _fema_feature("OPEN WATER", None, inside),
+    ]}
+    with respx.mock:
+        route = respx.get(geodata.FEMA_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            zones = await geodata._fetch_flood(client, LAT, LON, 300)
+        assert "maxAllowableOffset" in route.calls[0].request.url.params  # payload generalized
+    by_zone = {z.zone: z for z in zones}
+    assert set(by_zone) == {"A", "X", "D"}
+    assert by_zone["A"].sfha and by_zone["A"].overlaps_footprint
+    assert not by_zone["X"].sfha
+    assert not by_zone["D"].sfha
+
+
+# --- PAD-US nearby protected areas ------------------------------------------
+
+async def test_padus_protected_labels_gap_and_overlap():
+    payload = {"features": [{
+        "attributes": {"Unit_Nm": "Harriman State Park", "Des_Tp": "SP", "Loc_Ds": "State Park",
+                       "Mang_Name": "SPR", "Mang_Type": "STAT", "GAP_Sts": "2"},
+        "geometry": esri_square(LAT, LON, 0, 0, 2000),
+    }, {
+        "attributes": {"Unit_Nm": "OCS Block", "Des_Tp": "OCS", "Loc_Ds": None,
+                       "Mang_Name": "BOEM", "Mang_Type": "FED", "GAP_Sts": "4"},
+        "geometry": esri_square(LAT, LON, 3000, 0, 100),
+    }]}
+    with respx.mock:
+        respx.get(geodata.PADUS_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            lands = {p.name: p for p in await geodata._fetch_protected(client, LAT, LON, 300)}
+    park = lands["Harriman State Park"]
+    assert park.overlaps_footprint and park.gap_status == "2"
+    assert park.manager != "SPR"  # human-readable, not the raw PAD-US code
+    ocs = lands["OCS Block"]
+    assert ocs.designation != "OCS" and not ocs.overlaps_footprint
+
+
+# --- NWI state-wetland flag ---------------------------------------------------
+
+@pytest.mark.parametrize(
+    "state, acres, cls, expected",
+    [
+        ("NY", 15, "PEM1E", True),
+        ("NY", 15, "PFO1A", True),
+        ("NY", 5, "PEM1E", False),     # under the ECL Art. 24 size threshold
+        ("NY", 15, "R4SBC", False),    # riverine streambed is not a freshwater wetland
+        ("NY", 40, "L1UBHh", False),   # a lake is not a freshwater wetland
+        ("NJ", 1, "PSS1C", True),
+        ("NJ", 1, "R2UBH", False),
+        (None, 50, "PEM1E", False),    # jurisdiction unknown/unverified → no state claim
+    ],
+)
+def test_wetland_state_flag(state, acres, cls, expected):
+    flagged, _ = geodata._wetland_state_class(state, acres, cls)
+    assert flagged is expected
+
+
+async def test_nwi_live_wetlands_carry_live_provenance_label():
+    payload = {"features": [{
+        "attributes": {"Wetlands.ATTRIBUTE": "PEM1E", "Wetlands.WETLAND_TYPE": "Freshwater Emergent Wetland",
+                       "Wetlands.ACRES": 20.0},
+        "geometry": esri_square(LAT, LON, 0, 0, 50),
+    }]}
+    with respx.mock:
+        respx.get(geodata.NWI_URL).mock(return_value=httpx.Response(200, json=payload))
+        async with httpx.AsyncClient() as client:
+            [w] = await geodata._fetch_wetlands(client, LAT, LON, 300, "NY")
+    assert "live" in w.source
+    assert w.crosses_footprint and w.state_protected
+
+
+# --- NLCD ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("palette, expected", [(82, 82), (0, None), (250, None)])
+async def test_nlcd_nodata_is_not_a_land_cover_class(palette, expected):
+    body = {"type": "FeatureCollection", "features": [{"properties": {"PALETTE_INDEX": palette}}]}
+    with respx.mock:
+        respx.get(land_status.NLCD_WMS_URL).mock(return_value=httpx.Response(200, json=body))
+        async with httpx.AsyncClient() as client:
+            assert await land_status._nlcd_point(client, LAT, LON) == expected
+
+
+# --- layer deadline -------------------------------------------------------------
+
+async def test_slow_layer_is_marked_unavailable(monkeypatch):
+    """httpx timeouts are per-read; a trickling server must not stall a run."""
+    import asyncio
+
+    async def slow(*_a, **_k):
+        await asyncio.sleep(5)
+        return []
+
+    async def fast(*_a, **_k):
+        return []
+
+    monkeypatch.setattr(geodata, "LAYER_DEADLINE", 0.05)
+    monkeypatch.setattr(geodata, "_fetch_wetlands", slow)
+    monkeypatch.setattr(geodata, "_fetch_species", fast)
+    monkeypatch.setattr(geodata, "_fetch_flood", fast)
+    monkeypatch.setattr(geodata, "_fetch_protected", fast)
+    data = await geodata.fetch_all(LAT, LON, 300, "NY")
+    assert data["provenance"]["wetlands"] == "unavailable"
+    assert data["provenance"]["species"] == "live"
+
+
+# --- review regressions -------------------------------------------------------
+
+def _padus_feature(name, gap, geom, des="SP", loc="State Park", mang="SPR"):
+    return {"attributes": {"Unit_Nm": name, "Des_Tp": des, "Loc_Ds": loc, "Mang_Name": mang,
+                           "Mang_Type": "STAT", "GAP_Sts": gap}, "geometry": geom}
+
+
+async def test_padus_containing_unit_survives_capped_nearby_query():
+    """Dense areas hold hundreds of PAD-US records within 5 km; the capped
+    nearby query may omit the park the site is in, so it's queried separately."""
+    park = _padus_feature("Containing Park", "4", esri_square(LAT, LON, 0, 0, 1500))
+    others = [_padus_feature(f"Pocket Park {i}", "4", esri_square(LAT, LON, 3000, i * 10, 20), des="LP")
+              for i in range(25)]
+
+    def by_geometry_type(request):
+        overlap = request.url.params["geometryType"] == "esriGeometryEnvelope"
+        return httpx.Response(200, json={"features": [park] if overlap else others})
+
+    with respx.mock:
+        respx.get(geodata.PADUS_URL).mock(side_effect=by_geometry_type)
+        async with httpx.AsyncClient() as client:
+            lands = await geodata._fetch_protected(client, LAT, LON, 300)
+    assert lands[0].name == "Containing Park" and lands[0].overlaps_footprint
+
+
+async def test_padus_same_name_records_merge_without_losing_overlap():
+    fee = _padus_feature("Split Park", "4", esri_square(LAT, LON, 0, 0, 200))
+    designation = _padus_feature("Split Park", "2", esri_square(LAT, LON, 2500, 0, 100))
+    with respx.mock:
+        respx.get(geodata.PADUS_URL).mock(return_value=httpx.Response(200, json={"features": [fee, designation]}))
+        async with httpx.AsyncClient() as client:
+            [park] = await geodata._fetch_protected(client, LAT, LON, 300)
+    assert park.gap_status == "2"          # most protective status
+    assert park.overlaps_footprint         # overlap from the fee record kept
+    assert park.distance_m == 0.0
+
+
+async def test_ipac_is_queried_with_the_exact_footprint():
+    """Crithab hits are reported as 'in the footprint' — the query box must be the footprint."""
+    with respx.mock:
+        route = respx.post(geodata.IPAC_URL).mock(
+            return_value=httpx.Response(200, json=load_fixture("ipac_fairbanks.json")))
+        async with httpx.AsyncClient() as client:
+            await geodata._fetch_species(client, LAT, LON, 100)
+    ring = json.loads(json.loads(route.calls[0].request.content)["location.footprint"])["coordinates"][0]
+    half_height_m = (ring[2][1] - ring[0][1]) / 2 * 111_320
+    assert half_height_m == pytest.approx(100, abs=1)
+
+
+# --- Copilot review regressions ------------------------------------------------
+
+async def test_large_footprint_widens_the_search_radius():
+    """A 5,000-acre footprint has corners ~3.2 km out; the old fixed 1.6 km NWI /
+    1.2 km FEMA radii would never see wetlands or floodplain in its outer part."""
+    half = geodata.half_width_m(5000)
+    with respx.mock:
+        nwi = respx.get(geodata.NWI_URL).mock(return_value=httpx.Response(200, json={"features": []}))
+        fema = respx.get(geodata.FEMA_URL).mock(return_value=httpx.Response(200, json={"features": []}))
+        async with httpx.AsyncClient() as client:
+            await geodata._fetch_wetlands(client, LAT, LON, half, None)
+            await geodata._fetch_flood(client, LAT, LON, half)
+    corner = half * 2 ** 0.5
+    assert float(nwi.calls[0].request.url.params["distance"]) > corner
+    assert float(fema.calls[0].request.url.params["distance"]) > corner
+
+
+async def test_truncated_results_are_paged_to_completion():
+    """ArcGIS caps a page at maxRecordCount; the features past it must be fetched."""
+    page1 = {"features": [_fema_feature("AE", None, esri_square(LAT, LON, 900, 0, 20))], "exceededTransferLimit": True}
+    page2 = {"features": [_fema_feature("A", None, esri_square(LAT, LON, 0, 0, 100))]}
+
+    def paged(request):
+        return httpx.Response(200, json=page1 if request.url.params["resultOffset"] == "0" else page2)
+
+    with respx.mock:
+        respx.get(geodata.FEMA_URL).mock(side_effect=paged)
+        async with httpx.AsyncClient() as client:
+            zones = await geodata._fetch_flood(client, LAT, LON, 300)
+    assert {z.zone for z in zones} == {"AE", "A"}
+    assert any(z.overlaps_footprint for z in zones)   # the in-footprint zone was on page 2
+
+
+async def test_layer_too_large_to_fetch_is_unavailable_not_truncated():
+    endless = {"features": [_fema_feature("AE", None, esri_square(LAT, LON, 900, 0, 20))], "exceededTransferLimit": True}
+    with respx.mock:
+        respx.get(geodata.FEMA_URL).mock(return_value=httpx.Response(200, json=endless))
+        async with httpx.AsyncClient() as client:
+            assert await geodata._fetch_flood(client, LAT, LON, 300) is None
+
+
+async def test_padus_merge_draws_the_overlapping_record():
+    """If one record overlaps (at a corner, 700 m out) and a same-name record is nearer
+    but outside, the merged unit must show the overlapping geometry and distance."""
+    corner = _padus_feature("Split Park", "4", esri_square(LAT, LON, 520, 520, 30))
+    near_outside = _padus_feature("Split Park", "4", esri_square(LAT, LON, 0, 560, 20))  # 540 m N, outside
+    with respx.mock:
+        respx.get(geodata.PADUS_URL).mock(
+            return_value=httpx.Response(200, json={"features": [near_outside, corner]}))
+        async with httpx.AsyncClient() as client:
+            [park] = await geodata._fetch_protected(client, LAT, LON, 500)
+    assert park.overlaps_footprint
+    assert park.distance_m > 600          # distance of the overlapping (corner) record
