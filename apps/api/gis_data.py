@@ -25,7 +25,7 @@ from __future__ import annotations
 import hashlib
 import math
 import random
-from typing import Any, Optional
+from typing import Any
 
 import geodata
 from models import (
@@ -236,7 +236,7 @@ async def ingest_live(site_input: SiteInput, jurisdiction: Jurisdiction) -> GISP
 
 
 def _simulated_payload(
-    site_input: SiteInput, jurisdiction: Jurisdiction, site: Optional[Site] = None
+    site_input: SiteInput, jurisdiction: Jurisdiction, site: Site | None = None
 ) -> GISPayload:
     """Deterministic synthetic payload — used ONLY as a last-resort fallback
     when live services are unreachable. Flagged provenance='simulated' so the

@@ -7,7 +7,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 
 def _load_dotenv() -> None:
@@ -87,7 +87,7 @@ def _condition(run_id: str) -> asyncio.Condition:
     return _conditions[run_id]
 
 
-async def _emit(run_id: str, event: Optional[dict[str, Any]]) -> None:
+async def _emit(run_id: str, event: dict[str, Any] | None) -> None:
     """Append an event (None = just notify) and wake SSE subscribers."""
     if event is not None:
         _events.setdefault(run_id, []).append(event)
@@ -147,7 +147,7 @@ async def create_run(site: SiteInput) -> RunCreated:
          summary="List recent runs (newest first)")
 async def list_runs(
     limit: int = Query(20, ge=1, le=100),
-    ids: Optional[str] = Query(None, description="Comma-separated run ids; restricts the list to those runs."),
+    ids: str | None = Query(None, description="Comma-separated run ids; restricts the list to those runs."),
 ) -> list[dict[str, Any]]:
     # ids absent → list every run; ids present (even empty) → only those runs.
     wanted = None

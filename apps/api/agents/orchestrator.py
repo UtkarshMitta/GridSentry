@@ -7,8 +7,9 @@ frontend's SSE stream to animate each agent's "thinking" steps.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 import gis_data
 import grounding

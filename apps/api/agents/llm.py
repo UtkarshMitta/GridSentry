@@ -9,7 +9,7 @@ from __future__ import annotations
 import contextvars
 import json
 import os
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -45,7 +45,7 @@ def engine_used() -> str:
     return f"deterministic ({configured} unavailable)"
 
 
-async def complete_json(system: str, user: str) -> Optional[dict[str, Any]]:
+async def complete_json(system: str, user: str) -> dict[str, Any] | None:
     """Ask the LLM for a JSON object. Returns None if unavailable/failed."""
     which = engine()
     try:
@@ -63,7 +63,7 @@ async def complete_json(system: str, user: str) -> Optional[dict[str, Any]]:
     return None
 
 
-async def _openai(system: str, user: str) -> Optional[dict[str, Any]]:
+async def _openai(system: str, user: str) -> dict[str, Any] | None:
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.post(
             "https://api.openai.com/v1/chat/completions",
@@ -82,7 +82,7 @@ async def _openai(system: str, user: str) -> Optional[dict[str, Any]]:
         return json.loads(resp.json()["choices"][0]["message"]["content"])
 
 
-async def _anthropic(system: str, user: str) -> Optional[dict[str, Any]]:
+async def _anthropic(system: str, user: str) -> dict[str, Any] | None:
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",

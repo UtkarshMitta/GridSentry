@@ -20,7 +20,8 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from typing import Any, Awaitable, Optional, TypeVar
+from collections.abc import Awaitable
+from typing import Any, TypeVar
 
 import httpx
 
@@ -95,7 +96,7 @@ async def _query_all(client: httpx.AsyncClient, url: str, params: dict[str, Any]
     raise ValueError(f"more than {len(feats)} features — too many to assess completely")
 
 
-async def _with_deadline(coro: Awaitable[Optional[T]]) -> Optional[T]:
+async def _with_deadline(coro: Awaitable[T | None]) -> T | None:
     try:
         return await asyncio.wait_for(coro, LAYER_DEADLINE)
     except Exception:  # includes asyncio.TimeoutError
@@ -176,7 +177,7 @@ def _closest_on_segment(a: tuple[float, float], b: tuple[float, float]) -> tuple
     return a[0] + t * dx, a[1] + t * dy
 
 
-def _nearest(lat: float, lon: float, geometry: dict[str, Any]) -> tuple[float, Optional[tuple[float, float]]]:
+def _nearest(lat: float, lon: float, geometry: dict[str, Any]) -> tuple[float, tuple[float, float] | None]:
     """(distance m, nearest boundary point in local metres); (0, None) if inside."""
     rings = _local_rings(lat, lon, geometry)
     if not rings:
@@ -231,7 +232,7 @@ def footprint_overlaps(lat: float, lon: float, half_m: float, geometry: dict[str
     )
 
 
-def _bearing_to(lat: float, lon: float, geometry: dict[str, Any], nearest_pt: Optional[tuple[float, float]]) -> str:
+def _bearing_to(lat: float, lon: float, geometry: dict[str, Any], nearest_pt: tuple[float, float] | None) -> str:
     """Compass bearing from site to the nearest boundary point (or polygon centroid if inside)."""
     if nearest_pt is None:
         rings = _local_rings(lat, lon, geometry)
@@ -290,8 +291,8 @@ FRESHWATER_VEGETATED = ("PEM", "PFO", "PSS", "PAB")
 
 
 def _wetland_state_class(
-    state_code: Optional[str], acres: float, classification: str = ""
-) -> tuple[bool, Optional[str]]:
+    state_code: str | None, acres: float, classification: str = ""
+) -> tuple[bool, str | None]:
     """Best-effort *conditional* state-jurisdiction flag from real attributes.
 
     We do NOT assert a state class we can't verify. We only note where a
@@ -309,8 +310,8 @@ def _wetland_state_class(
 
 
 async def _fetch_wetlands(
-    client: httpx.AsyncClient, lat: float, lon: float, half_m: float, state_code: Optional[str]
-) -> Optional[list[Wetland]]:
+    client: httpx.AsyncClient, lat: float, lon: float, half_m: float, state_code: str | None
+) -> list[Wetland] | None:
     params = _arcgis_point_params(
         lat, lon, _search_radius_m(half_m, NWI_SEARCH_M, 800),
         "Wetlands.ATTRIBUTE,Wetlands.WETLAND_TYPE,Wetlands.ACRES",
@@ -358,7 +359,7 @@ async def _fetch_wetlands(
 
 # --- IPaC species + critical habitat ---------------------------------------
 
-def _sid_key(sid: Any) -> Optional[str]:
+def _sid_key(sid: Any) -> str | None:
     """IPaC population ids come as {"id": 176, "val": "Population$Sid[176]"} or a bare string."""
     if isinstance(sid, dict):
         sid = sid.get("val") or (f"Population$Sid[{sid['id']}]" if "id" in sid else None)
@@ -367,7 +368,7 @@ def _sid_key(sid: Any) -> Optional[str]:
 
 async def _fetch_species(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float
-) -> Optional[list[Habitat]]:
+) -> list[Habitat] | None:
     # The project footprint square itself: crithab hits are reported as
     # "intersecting the footprint", so the query area must be exactly that.
     d = half_m / 111_320
@@ -466,7 +467,7 @@ def _is_sfha(zone: str) -> bool:
 
 async def _fetch_flood(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float
-) -> Optional[list[FloodZone]]:
+) -> list[FloodZone] | None:
     params = _arcgis_point_params(lat, lon, _search_radius_m(half_m, FEMA_SEARCH_M, 400), "FLD_ZONE,ZONE_SUBTY")
     try:
         feats = await _query_all(client, FEMA_URL, params)
@@ -550,7 +551,7 @@ PADUS_DESIGNATIONS = {
 
 async def _fetch_protected(
     client: httpx.AsyncClient, lat: float, lon: float, half_m: float
-) -> Optional[list[ProtectedLand]]:
+) -> list[ProtectedLand] | None:
     fields = "Unit_Nm,Des_Tp,Loc_Ds,Mang_Name,Mang_Type,GAP_Sts"
     # Suburban areas hold hundreds of PAD-US records within 5 km, returned in
     # arbitrary order, so a capped "nearby" query can miss the unit the site
@@ -643,7 +644,7 @@ def half_width_m(acreage: float) -> float:
 
 
 async def fetch_all(
-    lat: float, lon: float, acreage: float, state_code: Optional[str] = None
+    lat: float, lon: float, acreage: float, state_code: str | None = None
 ) -> dict[str, Any]:
     """Query every live layer concurrently. Returns features + provenance.
 

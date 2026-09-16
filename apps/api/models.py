@@ -4,7 +4,7 @@ These mirror the TypeScript types in apps/web/lib/types.ts — keep in sync.
 """
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -17,24 +17,24 @@ class SiteInput(BaseModel):
     lat: float = Field(ge=-90, le=90)
     lon: float = Field(ge=-180, le=180)
     project_type: ProjectType = "solar"
-    name: Optional[str] = None
+    name: str | None = None
     # Proposed project footprint in acres. Optional: when omitted a fixed,
     # clearly-labelled default is assumed (never a per-coordinate guess).
-    acreage: Optional[float] = Field(default=None, ge=1, le=50_000)
+    acreage: float | None = Field(default=None, ge=1, le=50_000)
 
 
 class Jurisdiction(BaseModel):
     """Resolved real-world jurisdiction for the site coordinates."""
-    state: Optional[str] = None          # e.g. "New Jersey"
-    state_code: Optional[str] = None     # e.g. "NJ"
-    county: Optional[str] = None
-    locality: Optional[str] = None       # town/city
-    country_code: Optional[str] = None
+    state: str | None = None          # e.g. "New Jersey"
+    state_code: str | None = None     # e.g. "NJ"
+    county: str | None = None
+    locality: str | None = None       # town/city
+    country_code: str | None = None
     verified: bool = False               # cross-checked against web sources
     method: str = "unresolved"           # nominatim+census[+tavily] | census | nominatim | conflict | bbox-fallback | unresolved
     # True: inside a U.S. state/territory (datasets apply). False: positively
     # outside (foreign country / open ocean). None: lookups failed, unknown.
-    in_coverage: Optional[bool] = None
+    in_coverage: bool | None = None
     sources: list[dict[str, str]] = []   # {title, url} used for verification
 
 
@@ -42,20 +42,20 @@ class LandStatus(BaseModel):
     """Result of the Land Status Gate — ownership + physical buildability."""
     developable: bool = True
     category: str = "developable"        # developable | federal_protected | urban_built | open_water | outside_coverage
-    owner_type: Optional[str] = None     # e.g. "Federal"
-    manager: Optional[str] = None        # e.g. "National Park Service"
-    manager_code: Optional[str] = None   # e.g. "NPS"
-    unit_name: Optional[str] = None      # e.g. "Grand Canyon National Park"
-    designation: Optional[str] = None    # e.g. "National Park"
-    designation_code: Optional[str] = None  # PAD-US Des_Tp code, e.g. "NP", "WA"
+    owner_type: str | None = None     # e.g. "Federal"
+    manager: str | None = None        # e.g. "National Park Service"
+    manager_code: str | None = None   # e.g. "NPS"
+    unit_name: str | None = None      # e.g. "Grand Canyon National Park"
+    designation: str | None = None    # e.g. "National Park"
+    designation_code: str | None = None  # PAD-US Des_Tp code, e.g. "NP", "WA"
     gap_status: str = ""                 # PAD-US GAP status code (1-4)
     # Land-cover / buildability check (NLCD grid sample over the footprint)
     land_cover_checked: bool = False
-    dominant_cover: Optional[str] = None     # e.g. "Developed, High Intensity"
-    dominant_cover_class: Optional[int] = None  # NLCD class code, e.g. 24
-    developed_fraction: Optional[float] = None  # share of samples in classes 21-24
-    high_intensity_fraction: Optional[float] = None  # share in classes 23-24
-    water_fraction: Optional[float] = None      # share in class 11
+    dominant_cover: str | None = None     # e.g. "Developed, High Intensity"
+    dominant_cover_class: int | None = None  # NLCD class code, e.g. 24
+    developed_fraction: float | None = None  # share of samples in classes 21-24
+    high_intensity_fraction: float | None = None  # share in classes 23-24
+    water_fraction: float | None = None      # share in class 11
     verified: bool = False
     method: str = "unverified"           # padus+nlcd | padus | nlcd | offline-bbox | unverified
     sources: list[dict[str, str]] = []
@@ -82,7 +82,7 @@ class Wetland(BaseModel):
     bearing: str                 # compass, e.g. "E"
     area_acres: float
     state_protected: bool
-    state_class: Optional[str] = None  # e.g. "NYS Class I"
+    state_class: str | None = None  # e.g. "NYS Class I"
     geometry: dict[str, Any]
     name_verified: bool = False        # name confirmed against real-world sources
     crosses_footprint: bool = False    # polygon intersects the project footprint square
@@ -109,7 +109,7 @@ class ProtectedLand(BaseModel):
     bearing: str
     geometry: dict[str, Any]
     name_verified: bool = False
-    designation_code: Optional[str] = None  # PAD-US Des_Tp
+    designation_code: str | None = None  # PAD-US Des_Tp
     gap_status: str = ""                    # PAD-US GAP 1-4 (1-2 = managed for biodiversity)
     overlaps_footprint: bool = False
     source: str = "USGS Protected Areas Database (PAD-US)"
@@ -170,7 +170,7 @@ class Finding(BaseModel):
     severity: Literal["high", "moderate", "low", "info"]
     detail: str
     citation_ids: list[str] = []
-    feature_id: Optional[str] = None
+    feature_id: str | None = None
 
 
 class ReportSection(BaseModel):
@@ -225,11 +225,11 @@ class Report(BaseModel):
 class PipelineEvent(BaseModel):
     """One progress event from the agent pipeline (SSE payload)."""
     type: str                              # status | gis | complete | error
-    agent: Optional[str] = None            # system | geolocation | legal | critic
-    state: Optional[str] = None            # start | thinking | done
-    message: Optional[str] = None
-    progress: Optional[float] = None       # 0-1
-    ts: Optional[str] = None
+    agent: str | None = None            # system | geolocation | legal | critic
+    state: str | None = None            # start | thinking | done
+    message: str | None = None
+    progress: float | None = None       # 0-1
+    ts: str | None = None
 
 
 class RunCreated(BaseModel):
@@ -249,16 +249,16 @@ class RunBase(BaseModel):
 
 class RunSummary(RunBase):
     """A row of run history: the verdict at a glance, no payloads."""
-    verdict: Optional[str] = None            # assessed | not_viable (None until complete)
-    risk_level: Optional[RiskLevel] = None   # None until the run completes
-    risk_score: Optional[int] = None
+    verdict: str | None = None            # assessed | not_viable (None until complete)
+    risk_level: RiskLevel | None = None   # None until the run completes
+    risk_score: int | None = None
 
 
 class RunDetail(RunBase):
     """A full run: the GIS payload, the report, and the events it emitted.
     The verdict and risk live on `report` — never duplicated here."""
-    gis: Optional[GISPayload] = None
-    report: Optional[Report] = None
+    gis: GISPayload | None = None
+    report: Report | None = None
     events: list[PipelineEvent] = []
 
 

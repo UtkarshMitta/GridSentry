@@ -5,11 +5,11 @@ import json
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 DB_PATH = Path(__file__).parent / "gridsentry.db"
 _lock = threading.Lock()
-_conn: Optional[sqlite3.Connection] = None
+_conn: sqlite3.Connection | None = None
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -82,7 +82,7 @@ def fail_orphaned_runs(message: str) -> int:
     return len(rows)
 
 
-def get_run(run_id: str) -> Optional[dict[str, Any]]:
+def get_run(run_id: str) -> dict[str, Any] | None:
     with _lock:
         row = _get_conn().execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     if row is None:
@@ -90,7 +90,7 @@ def get_run(run_id: str) -> Optional[dict[str, Any]]:
     return _row_to_dict(row)
 
 
-def list_runs(limit: int = 20, ids: Optional[list[str]] = None) -> list[dict[str, Any]]:
+def list_runs(limit: int = 20, ids: list[str] | None = None) -> list[dict[str, Any]]:
     """Recent runs, newest first. `ids` restricts the list to those runs."""
     with _lock:
         conn = _get_conn()

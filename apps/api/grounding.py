@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -50,7 +50,7 @@ STATE_CODES = {
 }
 
 
-async def _tavily_search(query: str, max_results: int = 3) -> Optional[list[dict[str, Any]]]:
+async def _tavily_search(query: str, max_results: int = 3) -> list[dict[str, Any]] | None:
     """Tavily advanced search. Returns result list or None on any failure."""
     key = os.environ.get("TAVILY_API_KEY")
     if not key:
@@ -74,7 +74,7 @@ async def _tavily_search(query: str, max_results: int = 3) -> Optional[list[dict
 
 # Lookup outcomes: ("ok", data) | ("no_result", None) — the service answered
 # that nothing is there (ocean / foreign) | ("failed", None) — no answer.
-Lookup = tuple[str, Optional[dict[str, Any]]]
+Lookup = tuple[str, dict[str, Any] | None]
 
 
 async def _reverse_geocode(lat: float, lon: float) -> Lookup:
@@ -120,7 +120,7 @@ async def _census_lookup(lat: float, lon: float) -> Lookup:
     }
 
 
-def _bbox_fallback(lat: float, lon: float) -> Optional[tuple[str, str]]:
+def _bbox_fallback(lat: float, lon: float) -> tuple[str, str] | None:
     """Very coarse offline fallback. Only used when all lookups fail, and
     the result is always marked unverified. Deliberately conservative: only
     regions that don't overlap a neighboring state's core territory."""

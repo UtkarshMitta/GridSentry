@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import math
 from collections import Counter
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -124,7 +124,7 @@ _FALLBACK_UNITS = [
 ]
 
 
-def _classify(attrs: dict[str, Any]) -> Optional[LandStatus]:
+def _classify(attrs: dict[str, Any]) -> LandStatus | None:
     """Turn a PAD-US feature into a non-developable LandStatus, or None if
     the feature doesn't bar development."""
     des_tp = (attrs.get("Des_Tp") or "").strip()
@@ -157,7 +157,7 @@ def _classify(attrs: dict[str, Any]) -> Optional[LandStatus]:
     return None
 
 
-async def _query_padus(lat: float, lon: float) -> Optional[list[dict[str, Any]]]:
+async def _query_padus(lat: float, lon: float) -> list[dict[str, Any]] | None:
     params = {
         "geometry": f"{lon},{lat}",
         "geometryType": "esriGeometryPoint",
@@ -181,7 +181,7 @@ async def _query_padus(lat: float, lon: float) -> Optional[list[dict[str, Any]]]
 
 # --- Check 2: physical buildability (NLCD land cover) -----------------------
 
-async def _nlcd_point(client: httpx.AsyncClient, lat: float, lon: float) -> Optional[int]:
+async def _nlcd_point(client: httpx.AsyncClient, lat: float, lon: float) -> int | None:
     """Sample the NLCD land-cover class at one point via WMS GetFeatureInfo."""
     d = 0.0002
     params = {
@@ -214,7 +214,7 @@ async def _nlcd_point(client: httpx.AsyncClient, lat: float, lon: float) -> Opti
 
 async def _sample_footprint_cover(
     lat: float, lon: float, acreage: float
-) -> Optional[list[int]]:
+) -> list[int] | None:
     """5x5 grid of NLCD samples covering the proposed project footprint.
 
     Returns the list of land-cover classes, or None if the service is
@@ -257,7 +257,7 @@ NLCD_SOURCE = {
 }
 
 
-def _urban_fallback(lat: float, lon: float) -> Optional[LandStatus]:
+def _urban_fallback(lat: float, lon: float) -> LandStatus | None:
     for min_lat, max_lat, min_lon, max_lon, name in _FALLBACK_URBAN_CORES:
         if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
             return LandStatus(
@@ -276,7 +276,7 @@ def _urban_fallback(lat: float, lon: float) -> Optional[LandStatus]:
     return None
 
 
-def _fallback(lat: float, lon: float) -> Optional[LandStatus]:
+def _fallback(lat: float, lon: float) -> LandStatus | None:
     for min_lat, max_lat, min_lon, max_lon, unit, agency, desig in _FALLBACK_UNITS:
         if min_lat <= lat <= max_lat and min_lon <= lon <= max_lon:
             return LandStatus(
@@ -312,7 +312,7 @@ async def check(lat: float, lon: float, acreage: float = 300.0) -> LandStatus:
     ownership_verified = features is not None
     if features is not None:
         # Real data reached. Prefer the most restrictive matching feature.
-        best: Optional[LandStatus] = None
+        best: LandStatus | None = None
         for f in features:
             status = _classify(f.get("attributes", {}))
             if status is None:
