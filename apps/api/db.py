@@ -50,6 +50,7 @@ def create_run(run_id: str, created_at: str, name: str, lat: float, lon: float, 
 def update_run(run_id: str, **fields: Any) -> None:
     mapping = {
         "status": lambda v: v,
+        "name": lambda v: v,
         "gis": lambda v: json.dumps(v),
         "report": lambda v: json.dumps(v),
         "events": lambda v: json.dumps(v),
@@ -89,11 +90,22 @@ def get_run(run_id: str) -> Optional[dict[str, Any]]:
     return _row_to_dict(row)
 
 
-def list_runs(limit: int = 20) -> list[dict[str, Any]]:
+def list_runs(limit: int = 20, ids: Optional[list[str]] = None) -> list[dict[str, Any]]:
+    """Recent runs, newest first. `ids` restricts the list to those runs."""
     with _lock:
-        rows = _get_conn().execute(
-            "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
-        ).fetchall()
+        conn = _get_conn()
+        if ids is None:
+            rows = conn.execute(
+                "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        elif ids:
+            placeholders = ",".join("?" * len(ids))
+            rows = conn.execute(
+                f"SELECT * FROM runs WHERE id IN ({placeholders}) ORDER BY created_at DESC LIMIT ?",
+                (*ids, limit),
+            ).fetchall()
+        else:
+            rows = []
     return [_row_to_dict(r, include_payloads=False) for r in rows]
 
 
@@ -113,6 +125,7 @@ def _row_to_dict(row: sqlite3.Row, include_payloads: bool = True) -> dict[str, A
         out["events"] = json.loads(row["events_json"]) if row["events_json"] else []
     else:
         report = json.loads(row["report_json"]) if row["report_json"] else None
+        out["verdict"] = report["verdict"] if report else None
         out["risk_level"] = report["risk_level"] if report else None
         out["risk_score"] = report["risk_score"] if report else None
     return out

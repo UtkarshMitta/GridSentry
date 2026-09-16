@@ -1,10 +1,9 @@
 """Land Status Gate: ownership (PAD-US) + buildability (NLCD) + coverage."""
 from __future__ import annotations
 
-
-import land_status
 from conftest import jur
 
+import land_status
 
 # Real PAD-US attributes returned for these points (recorded 2026-09).
 OKEFENOKEE = [

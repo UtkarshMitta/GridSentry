@@ -133,13 +133,40 @@ footprint in acres. If you leave the acreage blank, a 300-acre square footprint 
 labelled "(assumed)" in the report, and flagged by the Red-Team Critic. Every
 "inside the footprint" finding depends on that value.
 
-## Tests
+Analyses you start are listed under **Your recent analyses** on the home page.
+The run ids are kept in your browser (`localStorage`), so a shared deployment
+never shows one visitor another's sites.
+
+## Tests, linting, CI
 
 ```bash
-npm run test:api    # 103 offline tests: parsers on recorded payloads, gates, report logic, API/SSE
+npm run test:api    # 109 offline tests: parsers on recorded payloads, gates, report logic, API/SSE
 npm run test:web    # 25 tests: coordinate parsing, risk headline (Node >= 22.18, no extra deps)
 npm run test:live   # opt-in: full pipeline against the live federal services
+npm run lint        # ruff (apps/api) + ESLint (apps/web)
+npm run typecheck   # tsc --noEmit
 ```
+
+Every push and pull request runs the offline suites, both linters, the
+typecheck and a production build on Python 3.12 and 3.14
+(`.github/workflows/ci.yml`). The live checks stay opt-in, so CI never depends
+on a federal service being up.
+
+## API
+
+Interactive docs are served by the API itself: `http://localhost:8000/docs`
+(OpenAPI schema at `/openapi.json`), covering the full report shape.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /runs` | Start an assessment (`lat`, `lon`, optional `project_type`, `acreage`, `name`) |
+| `GET /runs/{id}/events` | Live progress as Server-Sent Events, ending with `complete` or `error` |
+| `GET /runs/{id}` | The run with its GIS payload and cited report |
+| `GET /runs?limit=&ids=` | Recent runs, newest first; `ids` restricts to specific runs |
+| `GET /health` | Liveness, configured LLM engine, API version |
+
+`ALLOWED_ORIGINS` (comma-separated) restricts CORS; it defaults to `*` so the
+hosted demo can be called from anywhere.
 
 ## LLM keys (optional)
 

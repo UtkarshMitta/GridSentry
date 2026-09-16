@@ -1,4 +1,4 @@
-import type { ProjectType, Run } from "./types";
+import type { ProjectType, Run, RunSummary } from "./types";
 
 // Env var takes precedence; local dev uses the local API; deployed builds
 // default to the hosted Render backend.
@@ -21,6 +21,13 @@ export async function createRun(input: {
     body: JSON.stringify(input),
   });
   if (!res.ok) throw new Error(`Failed to start analysis (${res.status})`);
+  return res.json();
+}
+
+export async function listRuns(limit = 6, ids?: string[]): Promise<RunSummary[]> {
+  const filter = ids ? `&ids=${encodeURIComponent(ids.join(","))}` : "";
+  const res = await fetch(`${API_URL}/runs?limit=${limit}${filter}`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`Could not list runs (${res.status})`);
   return res.json();
 }
 

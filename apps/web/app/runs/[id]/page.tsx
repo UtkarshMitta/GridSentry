@@ -102,6 +102,16 @@ export default function RunPage({ params }: { params: { id: string } }) {
     };
   }, [runId]);
 
+  // Reflect the run in the tab title (the page is client-rendered, so this
+  // cannot come from Next's metadata API).
+  useEffect(() => {
+    const name = run?.gis?.site.name;
+    document.title = name ? `${name} — GridSentry` : "Analysis — GridSentry";
+    return () => {
+      document.title = "GridSentry — Autonomous NEPA Permit Agent";
+    };
+  }, [run]);
+
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">
       <AnimatePresence mode="wait">

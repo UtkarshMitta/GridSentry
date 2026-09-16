@@ -5,13 +5,13 @@ import json
 import time
 
 import pytest
+from conftest import developable_status, jur, wetland
 from fastapi.testclient import TestClient
 
 import db
 import geodata
 import grounding
 import land_status
-from conftest import developable_status, jur, wetland
 
 
 @pytest.fixture()
@@ -62,7 +62,25 @@ def sse_events(client, run_id):
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    body = client.get("/health").json()
+    assert body["status"] == "ok" and body["version"]
+    assert body["engine"] == "deterministic"   # no keys in the test env
+
+
+def test_run_list_is_typed_and_limited(client):
+    run_id = client.post("/runs", json={"lat": 42.9, "lon": -74.3}).json()["run_id"]
+    wait_complete(client, run_id)
+    [row] = client.get("/runs", params={"limit": 1}).json()
+    assert row["id"] == run_id and row["status"] == "complete"
+    assert row["risk_level"] in ("high", "moderate", "low") and isinstance(row["risk_score"], int)
+    assert "gis" not in row and "events" not in row     # summary rows stay small
+    assert client.get("/runs", params={"limit": 0}).status_code == 422
+
+
+def test_openapi_documents_the_report_shape(client):
+    schemas = client.get("/openapi.json").json()["components"]["schemas"]
+    assert {"RunDetail", "RunSummary", "Report", "LandStatus", "PipelineEvent"} <= set(schemas)
+    assert "designation_code" in schemas["LandStatus"]["properties"]
 
 
 def test_full_run_lifecycle(client):
@@ -132,3 +150,70 @@ def test_persistence_failure_surfaces_as_error_not_complete(client, monkeypatch)
     events = sse_events(client, run_id)
     assert events[-1]["type"] == "error"
     assert not any(e["type"] == "complete" for e in events)
+
+
+def test_run_list_exposes_the_verdict(client, monkeypatch):
+    """History rows distinguish a gated 'not viable' run from a scored one."""
+    import land_status
+    from models import LandStatus
+
+    async def gated(lat, lon, acreage=300.0):
+        return LandStatus(developable=False, category="federal_protected", manager_code="NPS",
+                          unit_name="Grand Canyon National Park", designation="National Park",
+                          designation_code="NP", verified=True, method="padus")
+
+    monkeypatch.setattr(land_status, "check", gated)
+    run_id = client.post("/runs", json={"lat": 36.2, "lon": -111.9}).json()["run_id"]
+    wait_complete(client, run_id)
+    row = next(r for r in client.get("/runs").json() if r["id"] == run_id)
+    assert row["verdict"] == "not_viable"
+
+
+def test_run_detail_does_not_duplicate_report_fields(client):
+    """Detail rows carry the report itself; a second (unset) copy of the verdict
+    on the envelope would contradict it."""
+    run_id = client.post("/runs", json={"lat": 42.9, "lon": -74.3}).json()["run_id"]
+    run = wait_complete(client, run_id)
+    assert "verdict" not in run and "risk_level" not in run
+    assert run["report"]["verdict"] == "assessed"
+
+
+def test_run_list_can_be_restricted_to_given_ids(client):
+    """The public demo shares one database; the UI asks only for its own runs."""
+    mine = client.post("/runs", json={"lat": 42.9, "lon": -74.3}).json()["run_id"]
+    someone_else = client.post("/runs", json={"lat": 38.5, "lon": -98.5}).json()["run_id"]
+    wait_complete(client, mine)
+    wait_complete(client, someone_else)
+    rows = client.get("/runs", params={"ids": mine}).json()
+    assert [r["id"] for r in rows] == [mine]
+    assert client.get("/runs", params={"ids": ""}).json() == []
+    assert len(client.get("/runs").json()) == 2   # unfiltered still lists everything
+
+
+def test_completed_run_is_renamed_to_the_resolved_site_name(client):
+    """History rows should read like the report, not 'Site @ 42.9, -74.3'."""
+    run_id = client.post("/runs", json={"lat": 42.9, "lon": -74.3}).json()["run_id"]
+    run = wait_complete(client, run_id)
+    assert run["name"] == run["gis"]["site"]["name"]
+    assert not run["name"].startswith("Site @")
+
+
+def test_ids_filter_tolerates_spaces_and_blanks(client):
+    mine = client.post("/runs", json={"lat": 42.9, "lon": -74.3}).json()["run_id"]
+    wait_complete(client, mine)
+    rows = client.get("/runs", params={"ids": f" {mine} , ,"}).json()
+    assert [r["id"] for r in rows] == [mine]
+
+
+def test_blank_allowed_origins_does_not_block_every_origin(monkeypatch):
+    """An empty env var means 'unset' — not 'allow no origin at all'."""
+    import importlib
+
+    import main
+
+    monkeypatch.setenv("ALLOWED_ORIGINS", "  ")
+    assert importlib.reload(main)._origins == ["*"]
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://a.example, https://b.example")
+    assert importlib.reload(main)._origins == ["https://a.example", "https://b.example"]
+    monkeypatch.delenv("ALLOWED_ORIGINS")
+    importlib.reload(main)

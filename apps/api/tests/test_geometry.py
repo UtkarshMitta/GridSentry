@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import pytest
+from conftest import LAT, LON, esri_square
 
 import geodata
-from conftest import LAT, LON, esri_square
 
 
 def test_distance_zero_when_site_inside_polygon():

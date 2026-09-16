@@ -27,13 +27,13 @@ _load_dotenv()
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 import db
-from agents import orchestrator
-from models import SiteInput
+from agents import llm, orchestrator
+from models import Health, PipelineEvent, RunCreated, RunDetail, RunSummary, SiteInput
 
 INTERRUPTED = "Run interrupted: the API restarted before this analysis finished. Start a new analysis."
 
@@ -45,10 +45,28 @@ async def lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="GridSentry API", version="0.1.0", lifespan=lifespan)
+API_VERSION = "0.1.0"
+
+app = FastAPI(
+    title="GridSentry API",
+    version=API_VERSION,
+    lifespan=lifespan,
+    summary="Autonomous NEPA environmental permit agent.",
+    description=(
+        "Submit coordinates and an optional footprint; the 3-agent pipeline screens live federal "
+        "datasets (USFWS NWI + IPaC, FEMA NFHL, USGS PAD-US + NLCD) and returns a cited assessment.\n\n"
+        "Start a run with `POST /runs`, follow it on `GET /runs/{run_id}/events` (Server-Sent Events), "
+        "then read the finished report from `GET /runs/{run_id}`."
+    ),
+)
+# Open by default (the hosted demo is called from any origin); set
+# ALLOWED_ORIGINS to a comma-separated list to restrict a private deployment.
+# A blank value means "unset", not "allow nothing".
+_origins = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()] or ["*"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -90,6 +108,10 @@ async def _execute(run_id: str, site_input: SiteInput) -> None:
             db.update_run(
                 run_id,
                 status="complete",
+                # The resolved project name ("<locality> Solar Energy Center")
+                # is only known after ingestion; the row was created with a
+                # "Site @ lat, lon" placeholder.
+                name=gis.site.name,
                 gis=gis.model_dump(),
                 report=report.model_dump(),
                 events=_events[run_id] + [complete],
@@ -108,8 +130,9 @@ async def _execute(run_id: str, site_input: SiteInput) -> None:
     _conditions.pop(run_id, None)
 
 
-@app.post("/runs")
-async def create_run(site: SiteInput) -> dict[str, str]:
+@app.post("/runs", response_model=RunCreated, status_code=201, tags=["runs"],
+          summary="Start an assessment")
+async def create_run(site: SiteInput) -> RunCreated:
     run_id = uuid.uuid4().hex[:12]
     name = site.name or f"Site @ {site.lat:.4f}, {site.lon:.4f}"
     db.create_run(run_id, datetime.now(timezone.utc).isoformat(), name, site.lat, site.lon, site.project_type)
@@ -117,15 +140,25 @@ async def create_run(site: SiteInput) -> dict[str, str]:
     task = asyncio.create_task(_execute(run_id, site))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
-    return {"run_id": run_id}
+    return RunCreated(run_id=run_id)
 
 
-@app.get("/runs")
-async def list_runs() -> list[dict[str, Any]]:
-    return db.list_runs()
+@app.get("/runs", response_model=list[RunSummary], tags=["runs"],
+         summary="List recent runs (newest first)")
+async def list_runs(
+    limit: int = Query(20, ge=1, le=100),
+    ids: Optional[str] = Query(None, description="Comma-separated run ids; restricts the list to those runs."),
+) -> list[dict[str, Any]]:
+    # ids absent → list every run; ids present (even empty) → only those runs.
+    wanted = None
+    if ids is not None:
+        wanted = [run_id.strip() for run_id in ids.split(",")[:100] if run_id.strip()]
+    return db.list_runs(limit, wanted)
 
 
-@app.get("/runs/{run_id}")
+@app.get("/runs/{run_id}", response_model=RunDetail, tags=["runs"],
+         summary="Fetch a run, with its report once complete",
+         responses={404: {"description": "Run not found"}})
 async def get_run(run_id: str) -> dict[str, Any]:
     run = db.get_run(run_id)
     if run is None:
@@ -133,7 +166,19 @@ async def get_run(run_id: str) -> dict[str, Any]:
     return run
 
 
-@app.get("/runs/{run_id}/events")
+@app.get(
+    "/runs/{run_id}/events",
+    tags=["runs"],
+    summary="Live progress (Server-Sent Events)",
+    response_class=StreamingResponse,
+    responses={
+        200: {
+            "description": "A `text/event-stream` of PipelineEvent objects, ending with `complete` or `error`.",
+            "content": {"text/event-stream": {"schema": PipelineEvent.model_json_schema()}},
+        },
+        404: {"description": "Run not found"},
+    },
+)
 async def stream_events(run_id: str) -> StreamingResponse:
     run = db.get_run(run_id)
     if run is None:
@@ -186,6 +231,6 @@ async def stream_events(run_id: str) -> StreamingResponse:
     )
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+@app.get("/health", response_model=Health, tags=["ops"], summary="Liveness and configuration")
+async def health() -> Health:
+    return Health(status="ok", engine=llm.engine(), version=API_VERSION)

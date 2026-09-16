@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { CoordinateInput } from "@/components/coordinate-input";
+import { RecentRuns } from "@/components/recent-runs";
 import { SiteMap } from "@/components/site-map";
 import { Badge, Card } from "@/components/ui";
 
@@ -76,6 +77,9 @@ export default function Home() {
           </Card>
         </motion.div>
       </section>
+
+      {/* Recent analyses (hidden when there are none) */}
+      <RecentRuns />
 
       {/* Agent trio */}
       <section className="pb-20">

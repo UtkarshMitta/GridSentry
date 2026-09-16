@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 ProjectType = Literal["solar", "wind", "transmission"]
 RiskLevel = Literal["high", "moderate", "low"]
+RunStatus = Literal["running", "complete", "error"]
 
 
 class SiteInput(BaseModel):
@@ -219,3 +220,49 @@ class Report(BaseModel):
     citations: list[Citation]
     generated_at: str
     engine: str                  # "openai" | "anthropic" | "deterministic"
+
+
+class PipelineEvent(BaseModel):
+    """One progress event from the agent pipeline (SSE payload)."""
+    type: str                              # status | gis | complete | error
+    agent: Optional[str] = None            # system | geolocation | legal | critic
+    state: Optional[str] = None            # start | thinking | done
+    message: Optional[str] = None
+    progress: Optional[float] = None       # 0-1
+    ts: Optional[str] = None
+
+
+class RunCreated(BaseModel):
+    run_id: str
+
+
+class RunBase(BaseModel):
+    """Fields every run carries, with or without its payloads."""
+    id: str
+    created_at: str
+    name: str
+    lat: float
+    lon: float
+    project_type: ProjectType
+    status: RunStatus
+
+
+class RunSummary(RunBase):
+    """A row of run history: the verdict at a glance, no payloads."""
+    verdict: Optional[str] = None            # assessed | not_viable (None until complete)
+    risk_level: Optional[RiskLevel] = None   # None until the run completes
+    risk_score: Optional[int] = None
+
+
+class RunDetail(RunBase):
+    """A full run: the GIS payload, the report, and the events it emitted.
+    The verdict and risk live on `report` — never duplicated here."""
+    gis: Optional[GISPayload] = None
+    report: Optional[Report] = None
+    events: list[PipelineEvent] = []
+
+
+class Health(BaseModel):
+    status: str
+    engine: str          # openai | anthropic | deterministic (configured engine)
+    version: str

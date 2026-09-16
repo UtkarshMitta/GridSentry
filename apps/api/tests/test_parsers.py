@@ -7,12 +7,10 @@ import json
 import httpx
 import pytest
 import respx
+from conftest import LAT, LON, esri_square, load_fixture
 
 import geodata
 import land_status
-from conftest import LAT, LON, esri_square, load_fixture
-
-
 
 # --- IPaC -------------------------------------------------------------------
 

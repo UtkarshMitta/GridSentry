@@ -57,7 +57,7 @@ export function AgentProgress({ events }: { events: PipelineEvent[] }) {
         />
       </div>
 
-      <ol className="space-y-1">
+      <ol className="space-y-1" aria-live="polite" aria-busy={progress < 1}>
         {STAGES.map((stage) => {
           const state = states[stage.id];
           const message = lastByAgent.get(stage.id);

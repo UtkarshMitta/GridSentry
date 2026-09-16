@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { API_URL, createRun, parseCoordinates } from "@/lib/api";
+import { rememberRun } from "@/lib/history";
 import type { ProjectType } from "@/lib/types";
 import { Button, cn } from "./ui";
 
@@ -42,13 +43,14 @@ export function CoordinateInput({
       return;
     }
     const acres = acreage.trim() ? Number(acreage) : undefined;
-    if (acres !== undefined && !(acres > 0 && acres <= 50000)) {
+    if (acres !== undefined && !(acres >= 1 && acres <= 50000)) {
       setError("Acreage must be a number between 1 and 50,000 (or leave it blank).");
       return;
     }
     setSubmitting(true);
     try {
       const { run_id } = await createRun({ ...coords, project_type: projectType, acreage: acres });
+      rememberRun(run_id);
       router.push(`/runs/${run_id}`);
     } catch {
       setError(`Could not reach the analysis engine at ${API_URL}. Is the API running?`);

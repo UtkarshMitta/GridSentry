@@ -66,6 +66,8 @@ function CollapsibleSection({
     <Card className="overflow-hidden">
       <button
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-controls={`section-${section.id}`}
         className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition-colors hover:bg-white/[0.02]"
       >
         <div className="flex items-center gap-3">
@@ -94,6 +96,7 @@ function CollapsibleSection({
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.25, ease: "easeInOut" }}
             className="overflow-hidden"
+            id={`section-${section.id}`}
           >
             <div className="border-t border-edge px-5 py-4">
               <p className="text-[13px] leading-relaxed text-zinc-400">

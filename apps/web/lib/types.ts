@@ -191,6 +191,20 @@ export interface Report {
   engine: string;
 }
 
+/** A row of run history from `GET /runs` (no payloads). */
+export interface RunSummary {
+  id: string;
+  created_at: string;
+  name: string;
+  lat: number;
+  lon: number;
+  project_type: ProjectType;
+  status: "running" | "complete" | "error";
+  verdict: "assessed" | "not_viable" | null;
+  risk_level: RiskLevel | null;
+  risk_score: number | null;
+}
+
 export interface Run {
   id: string;
   created_at: string;

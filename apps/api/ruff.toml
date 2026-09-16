@@ -1,0 +1,16 @@
+# Lint config for the GridSentry API. Run: npm run lint:api
+line-length = 120
+target-version = "py310"
+exclude = [".venv"]
+
+[lint]
+# Rules that catch real problems: pycodestyle errors, pyflakes, import order,
+# bugbear, and unused arguments. (Style-only modernization rules such as UP are
+# deliberately left out — they would rewrite every Optional[...] annotation.)
+select = ["E4", "E7", "E9", "F", "I", "B", "ARG"]
+
+[lint.per-file-ignores]
+# Test doubles must mirror the signatures they replace.
+"tests/*" = ["ARG001", "ARG002"]
+# main.py loads .env before importing modules that read those variables.
+"main.py" = ["E402"]

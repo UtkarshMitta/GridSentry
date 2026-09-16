@@ -6,7 +6,6 @@ import respx
 
 import grounding
 
-
 NY_ADDR = {"address": {"county": "Montgomery County", "state": "New York",
                        "ISO3166-2-lvl4": "US-NY", "country_code": "us", "village": "Glen"}}
 UK_ADDR = {"address": {"city": "London", "state": "England", "country_code": "gb"}}
